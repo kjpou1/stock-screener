@@ -1,0 +1,268 @@
+name: Release Asset Cleanup
+
+on:
+  schedule:
+    - cron: '30 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview deletions without removing assets."
+        required: true
+        type: choice
+        default: "true"
+        options:
+          - "true"
+          - "false"
+
+concurrency:
+  group: release-asset-cleanup
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+    steps:
+      - name: Prune old release assets
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import tempfile
+          from collections import defaultdict
+          from dataclasses import dataclass
+          from pathlib import Path
+          from typing import Iterable
+
+          REPO = os.environ["GITHUB_REPOSITORY"]
+          DRY_RUN = os.environ.get("DRY_RUN", "true").strip().lower() != "false"
+
+          @dataclass(frozen=True)
+          class Policy:
+              release: str
+              keep: int
+              mode: str
+              patterns: tuple[re.Pattern[str], ...]
+
+          POLICIES = (
+              Policy(
+                  release="daily-price-data",
+                  keep=10,
+                  mode="dates",
+                  patterns=(
+                      re.compile(r"^daily-price-(?P<market>[a-z]{2})-(?P<date>\d{8})\.json\.gz$"),
+                  ),
+              ),
+              Policy(
+                  release="weekly-reference-data",
+                  keep=4,
+                  mode="dates",
+                  patterns=(
+                      re.compile(
+                          r"^weekly-reference-(?P<market>[a-z]{2})-(?P<date>\d{8})-.+\.json\.gz$"
+                      ),
+                      re.compile(r"^weekly-reference-(?P<date>\d{8})-.+\.json\.gz$"),
+                  ),
+              ),
+          )
+
+          def gh_json(args: list[str]) -> dict:
+              output = subprocess.check_output(
+                  ["gh", *args, "--repo", REPO],
+                  text=True,
+              )
+              return json.loads(output)
+
+          def asset_market_date(policy: Policy, name: str) -> tuple[str, str] | None:
+              if "-latest" in name:
+                  return None
+              for pattern in policy.patterns:
+                  match = pattern.match(name)
+                  if match is None:
+                      continue
+                  market = match.groupdict().get("market") or "legacy"
+                  return market, match.group("date")
+              return None
+
+          def list_assets(policy: Policy) -> list[dict]:
+              payload = gh_json(["release", "view", policy.release, "--json", "assets"])
+              return payload.get("assets") or []
+
+          def manifest_referenced_assets(policy: Policy) -> set[str]:
+              with tempfile.TemporaryDirectory(prefix=f"{policy.release}-latest-") as tmp:
+                  result = subprocess.run(
+                      [
+                          "gh",
+                          "release",
+                          "download",
+                          policy.release,
+                          "--pattern",
+                          "*latest*.json",
+                          "--dir",
+                          tmp,
+                          "--repo",
+                          REPO,
+                      ],
+                      text=True,
+                      capture_output=True,
+                  )
+                  if result.returncode != 0:
+                      message = (
+                          f"{policy.release}: unable to download latest manifests; "
+                          "aborting cleanup so bundle protections are not bypassed"
+                      )
+                      stderr = result.stderr.strip()
+                      if DRY_RUN:
+                          print(message)
+                          if stderr:
+                              print(stderr)
+                          return set()
+                      raise RuntimeError(f"{message}\n{stderr}")
+
+                  referenced: set[str] = set()
+                  for path in Path(tmp).glob("*.json"):
+                      try:
+                          payload = json.loads(path.read_text(encoding="utf-8"))
+                      except (OSError, json.JSONDecodeError) as exc:
+                          message = (
+                              f"{policy.release}: unreadable latest manifest "
+                              f"{path.name}: {exc}"
+                          )
+                          if DRY_RUN:
+                              print(message)
+                              continue
+                          raise RuntimeError(message) from exc
+                      bundle_name = str(payload.get("bundle_asset_name") or "").strip()
+                      if bundle_name:
+                          referenced.add(bundle_name)
+                  return referenced
+
+          def plan_deletions(
+              policy: Policy,
+              assets: Iterable[dict],
+              protected_names: set[str],
+          ) -> list[dict]:
+              grouped: dict[str, list[dict]] = defaultdict(list)
+              preserved = 0
+              for asset in assets:
+                  name = asset["name"]
+                  parsed = asset_market_date(policy, name)
+                  if parsed is None:
+                      preserved += 1
+                      continue
+                  market, date = parsed
+                  grouped[market].append(
+                      {
+                          **asset,
+                          "market": market,
+                          "date": date,
+                      }
+                  )
+
+              deletions: list[dict] = []
+              for market, market_assets in sorted(grouped.items()):
+                  ordered = sorted(
+                      market_assets,
+                      key=lambda item: (
+                          item["date"],
+                          item.get("createdAt") or "",
+                          item["name"],
+                      ),
+                      reverse=True,
+                  )
+                  if policy.mode == "dates":
+                      keep_dates = {
+                          item["date"]
+                          for item in sorted(
+                              {item["date"]: item for item in ordered}.values(),
+                              key=lambda item: item["date"],
+                              reverse=True,
+                          )[: policy.keep]
+                      }
+                      market_deletions = [
+                          item for item in ordered if item["date"] not in keep_dates
+                      ]
+                      kept = len(ordered) - len(market_deletions)
+                  else:
+                      keep_names = {item["name"] for item in ordered[: policy.keep]}
+                      market_deletions = [
+                          item for item in ordered if item["name"] not in keep_names
+                      ]
+                      kept = len(ordered) - len(market_deletions)
+
+                  protected_deletions = [
+                      item for item in market_deletions if item["name"] in protected_names
+                  ]
+                  if protected_deletions:
+                      print(
+                          f"{policy.release}: market={market} protected_by_latest_manifest="
+                          f"{len(protected_deletions)}"
+                      )
+                      market_deletions = [
+                          item for item in market_deletions if item["name"] not in protected_names
+                      ]
+                      kept = len(ordered) - len(market_deletions)
+
+                  print(
+                      f"{policy.release}: market={market} matched={len(ordered)} "
+                      f"kept={kept} delete={len(market_deletions)}"
+                  )
+                  deletions.extend(market_deletions)
+
+              print(f"{policy.release}: preserved_non_dated_or_latest={preserved}")
+              return sorted(
+                  deletions,
+                  key=lambda item: (item["market"], item["date"], item["name"]),
+              )
+
+          all_deletions: list[tuple[Policy, dict]] = []
+          for policy in POLICIES:
+              assets = list_assets(policy)
+              protected_names = manifest_referenced_assets(policy)
+              print(f"{policy.release}: protected_manifest_references={len(protected_names)}")
+              deletions = plan_deletions(policy, assets, protected_names)
+              delete_bytes = sum(int(asset.get("size") or 0) for asset in deletions)
+              print(
+                  f"{policy.release}: planned_deletions={len(deletions)} "
+                  f"planned_bytes={delete_bytes}"
+              )
+              all_deletions.extend((policy, asset) for asset in deletions)
+
+          if not all_deletions:
+              print("No release assets are eligible for deletion.")
+              raise SystemExit(0)
+
+          print("Assets selected for deletion:")
+          for policy, asset in all_deletions:
+              print(
+                  f"  {policy.release}: {asset['name']} "
+                  f"({asset.get('size', 0)} bytes, created {asset.get('createdAt')})"
+              )
+
+          if DRY_RUN:
+              print("DRY_RUN=true; no assets deleted.")
+              raise SystemExit(0)
+
+          for policy, asset in all_deletions:
+              subprocess.run(
+                  [
+                      "gh",
+                      "release",
+                      "delete-asset",
+                      policy.release,
+                      asset["name"],
+                      "--repo",
+                      REPO,
+                      "--yes",
+                  ],
+                  check=True,
+              )
+          print(f"Deleted {len(all_deletions)} release assets.")
+          PY
