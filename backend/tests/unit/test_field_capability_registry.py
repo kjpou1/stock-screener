@@ -35,6 +35,7 @@ from app.services.provider_routing_policy import (
     MARKET_IN,
     MARKET_JP,
     MARKET_KR,
+    MARKET_MY,
     MARKET_SG,
     MARKET_TW,
     MARKET_US,
@@ -55,7 +56,7 @@ def _field_map(artifact: dict) -> dict:
 def test_registry_is_versioned_and_shape_is_deterministic():
     artifact = field_capability_registry.artifact()
 
-    assert artifact["registry_version"] == "2026.05.17.1"
+    assert artifact["registry_version"] == "2026.05.24.1"
     assert artifact["routing_policy_version"] == POLICY_VERSION
     assert artifact["markets"] == [
         MARKET_US,
@@ -66,6 +67,7 @@ def test_registry_is_versioned_and_shape_is_deterministic():
         MARKET_TW,
         MARKET_CN,
         MARKET_SG,
+        MARKET_MY,
         MARKET_CA,
         MARKET_DE,
     ]

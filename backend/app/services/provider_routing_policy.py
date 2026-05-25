@@ -103,9 +103,10 @@ MARKET_CN = "CN"
 MARKET_CA = "CA"
 MARKET_DE = "DE"
 MARKET_SG = "SG"
+MARKET_MY = "MY"
 
 KNOWN_MARKETS: FrozenSet[str] = frozenset(
-    {MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN, MARKET_CA, MARKET_DE, MARKET_SG}
+    {MARKET_US, MARKET_HK, MARKET_IN, MARKET_JP, MARKET_KR, MARKET_TW, MARKET_CN, MARKET_CA, MARKET_DE, MARKET_SG, MARKET_MY}
 )
 
 DEFAULT_MARKET = MARKET_US
@@ -152,6 +153,10 @@ _POLICY_MATRIX: Mapping[str, Tuple[str, ...]] = {
     # free tier likewise excludes Singapore listings. yfinance natively
     # supports the .SI suffix produced by SecurityMasterService.
     MARKET_SG: (PROVIDER_YFINANCE,),
+    # MY: yfinance only. Finviz screener does not cover Bursa Malaysia;
+    # alphavantage free tier likewise excludes MY listings. yfinance natively
+    # supports the .KL suffix produced by SecurityMasterService.
+    MARKET_MY: (PROVIDER_YFINANCE,),
 }
 
 
