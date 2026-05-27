@@ -270,12 +270,12 @@ function GroupRow({ row, maxAbsNet, trendData }) {
       <TableRow
         hover
         onClick={toggle}
-        sx={{ cursor: 'pointer', '& > *': { borderBottom: 'unset' } }}
+        sx={{ cursor: 'pointer', '& > *': { borderBottom: 'unset', py: 0 } }}
       >
-        <TableCell sx={{ width: 32, py: 0.5 }}>
+        <TableCell sx={{ width: 32 }}>
           <IconButton
             size="small"
-            sx={{ p: 0.25 }}
+            sx={{ p: 0 }}
             aria-label={open ? `Collapse ${row.group}` : `Expand ${row.group}`}
             aria-expanded={open}
             onClick={(event) => {
@@ -286,26 +286,25 @@ function GroupRow({ row, maxAbsNet, trendData }) {
             {open ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
           </IconButton>
         </TableCell>
-        <TableCell sx={{ py: 0.5, fontWeight: 600 }}>{row.group}</TableCell>
-        <TableCell sx={{ py: 0.5, width: 96 }}>
+        <TableCell sx={{ fontWeight: 600 }}>{row.group}</TableCell>
+        <TableCell sx={{ width: 96 }}>
           <SplitBar upCount={row.up_count} downCount={row.down_count} />
         </TableCell>
         <TableCell
           align="right"
-          sx={{ py: 0.5, fontFamily: 'monospace', color: 'success.main', fontWeight: 600 }}
+          sx={{ fontFamily: 'monospace', color: 'success.main', fontWeight: 600 }}
         >
           {row.up_count}
         </TableCell>
         <TableCell
           align="right"
-          sx={{ py: 0.5, fontFamily: 'monospace', color: 'error.main', fontWeight: 600 }}
+          sx={{ fontFamily: 'monospace', color: 'error.main', fontWeight: 600 }}
         >
           {row.down_count}
         </TableCell>
         <TableCell
           align="right"
           sx={{
-            py: 0.5,
             fontFamily: 'monospace',
             fontWeight: 700,
             color: row.net > 0 ? 'success.main' : row.net < 0 ? 'error.main' : 'text.primary',
@@ -314,10 +313,10 @@ function GroupRow({ row, maxAbsNet, trendData }) {
         >
           {row.net > 0 ? `+${row.net}` : row.net}
         </TableCell>
-        <TableCell align="right" sx={{ py: 0.5, fontFamily: 'monospace' }}>
+        <TableCell align="right" sx={{ fontFamily: 'monospace' }}>
           {total}
         </TableCell>
-        <TableCell sx={{ py: 0.5, width: 96 }}>
+        <TableCell sx={{ width: 96 }}>
           <NetTrendSparkline data={trendData} />
         </TableCell>
       </TableRow>
