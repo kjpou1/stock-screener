@@ -1,6 +1,6 @@
-# Stock Screener 🇺🇸 🇨🇳 🇭🇰 🇯🇵 🇰🇷 🇹🇼 🇮🇳 🇩🇪 🇨🇦 🇸🇬
+# Stock Screener 🇺🇸 🇨🇳 🇭🇰 🇯🇵 🇰🇷 🇹🇼 🇮🇳 🇩🇪 🇨🇦 🇸🇬 🇲🇾
 
-A stock screening platform with multi-methodology scans across **US, Hong Kong, India, Japan, Korea, Taiwan, mainland China A-share, Germany, Canada, and Singapore** markets, AI-assisted research, theme discovery from social and news feeds, and real-time market breadth analysis. The supported deployment path is a single-tenant server stack built around Docker, PostgreSQL, Redis, and nginx.
+A stock screening platform with multi-methodology scans across **US, Hong Kong, India, Japan, Korea, Taiwan, mainland China A-share, Germany, Canada, Singapore, and Malaysia** markets, AI-assisted research, theme discovery from social and news feeds, and real-time market breadth analysis. The supported deployment path is a single-tenant server stack built around Docker, PostgreSQL, Redis, and nginx.
 
 ### Scan Workflow Demo
 
@@ -20,7 +20,7 @@ The static page is for demo purposes only. It is a read-only daily snapshot with
 
 ### Multi-Market Coverage
 
-Scan and track ten markets:
+Scan and track eleven markets:
 
 - 🇺🇸 **United States** — NYSE, NASDAQ, AMEX, S&P 500
 - 🇭🇰 **Hong Kong** — HSI
@@ -32,11 +32,12 @@ Scan and track ten markets:
 - 🇩🇪 **Germany** — XETRA, DAX
 - 🇨🇦 **Canada** — TSX, TSXV
 - 🇸🇬 **Singapore** — SGX
+- 🇲🇾 **Malaysia** — Bursa Malaysia (Main + ACE), FBM KLCI
 
-Each market runs on its own exchange calendar (XNYS / XHKG / XNSE / XTKS / XKRX / XTAI / XSHG / XETR / XTSE / XSES) with independent Celery refresh queues and locks, so US, Asia, and Europe can hydrate in parallel without stepping on each other. Switch markets from the scan control bar; mixed-universe results are tagged with per-row colored badges.
+Each market runs on its own exchange calendar (XNYS / XHKG / XNSE / XTKS / XKRX / XTAI / XSHG / XETR / XTSE / XSES / XKLS) with independent Celery refresh queues and locks, so US, Asia, and Europe can hydrate in parallel without stepping on each other. Switch markets from the scan control bar; mixed-universe results are tagged with per-row colored badges.
 
 ![Market selector](docs/screenshots/market-selector.jpg)
-*Market picker in the scan control bar — pick US, HK, IN, JP, KR, TW, CN, DE, CA, or SG and scope to an exchange or index*
+*Market picker in the scan control bar — pick US, HK, IN, JP, KR, TW, CN, DE, CA, SG, or MY and scope to an exchange or index*
 
 ![Market badges](docs/screenshots/market-badges.png)
 *Color-coded per-market badges in the Symbol column — US (blue), HK (green), JP (yellow); Taiwan, India, Korea, China, Germany, and Canada follow the same pattern*
@@ -182,7 +183,7 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 | Route | Page | Description |
 |-------|------|-------------|
 | `/` | Routine | Market dashboard with Key Markets, Themes, Watchlists, Stockbee tabs |
-| `/scan` | Bulk Scanner | Multi-market scanning (US / HK / IN / JP / KR / TW / CN / DE / CA / SG) with 80+ filters, per-market badges, and CSV export |
+| `/scan` | Bulk Scanner | Multi-market scanning (US / HK / IN / JP / KR / TW / CN / DE / CA / SG / MY) with 80+ filters, per-market badges, and CSV export |
 | `/breadth` | Market Breadth | StockBee-style breadth indicators and trends |
 | `/groups` | Group Rankings | IBD industry group rankings with movers |
 | `/themes` | Themes | AI-powered theme discovery with trending/emerging detection |
@@ -191,7 +192,7 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 
 ## Key Capabilities
 
-- **10 supported markets** — US, Hong Kong, India, Japan, Korea, Taiwan, mainland China, Germany, Canada, Singapore — with per-market exchange calendars, independent refresh queues, and scan-time freshness guards
+- **11 supported markets** — US, Hong Kong, India, Japan, Korea, Taiwan, mainland China, Germany, Canada, Singapore, Malaysia — with per-market exchange calendars, independent refresh queues, and scan-time freshness guards
 - **First-run bootstrap wizard** with live staged progress and background hydration of secondary markets
 - **6 screening methodologies** with composite scoring (Minervini, CANSLIM, IPO, Volume Breakthrough, Setup Engine, Custom)
 - **80+ configurable filters** with saved presets across fundamental, technical, and rating categories
