@@ -10,9 +10,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.database import Base
 from app.api.v1 import breadth, groups
 from app.domain.markets import SUPPORTED_MARKET_CODES, market_registry
 from app.domain.markets.catalog import get_market_catalog
+from app.models.stock_universe import StockUniverse, UNIVERSE_STATUS_ACTIVE
 from app.services import provider_routing_policy
 from app.services.field_capability_registry import field_capability_registry
 from app.services.security_master_service import SecurityMasterResolver
@@ -81,6 +86,66 @@ def _catalog_market_codes_by_capability(capability: str) -> set[str]:
     }
 
 
+def _make_session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, autocommit=False, autoflush=False)()
+
+
+def _active_universe_currency_drift(db) -> list[dict[str, object]]:
+    catalog = get_market_catalog()
+    drift: list[dict[str, object]] = []
+    rows = (
+        db.query(StockUniverse.symbol, StockUniverse.market, StockUniverse.currency)
+        .filter(StockUniverse.is_active.is_(True))
+        .all()
+    )
+    for symbol, market, currency in rows:
+        market_code = str(market or "").strip().upper()
+        row_currency = str(currency or "").strip().upper()
+        entry = catalog.get(market_code)
+        if row_currency not in entry.supported_currencies:
+            drift.append(
+                {
+                    "symbol": symbol,
+                    "market": market_code,
+                    "currency": row_currency,
+                    "supported_currencies": entry.supported_currencies,
+                }
+            )
+    return drift
+
+
+def _active_universe_timezone_drift(db) -> list[dict[str, object]]:
+    catalog = get_market_catalog()
+    drift: list[dict[str, object]] = []
+    rows = (
+        db.query(
+            StockUniverse.symbol,
+            StockUniverse.market,
+            StockUniverse.exchange,
+            StockUniverse.timezone,
+        )
+        .filter(StockUniverse.is_active.is_(True))
+        .all()
+    )
+    for symbol, market, mic, timezone in rows:
+        market_code = str(market or "").strip().upper()
+        row_mic = str(mic or "").strip().upper()
+        expected_timezone = catalog.get(market_code).mic_facts_for(row_mic).timezone
+        if timezone != expected_timezone:
+            drift.append(
+                {
+                    "symbol": symbol,
+                    "market": market_code,
+                    "mic": row_mic,
+                    "timezone": timezone,
+                    "expected_timezone": expected_timezone,
+                }
+            )
+    return drift
+
+
 def _fallback_catalog_codes_from_frontend() -> list[str]:
     # Phase 0 only guards fallback code drift. A generated/structured frontend
     # catalog fixture belongs with the later frontend contract standardization
@@ -131,6 +196,100 @@ def test_catalog_canonical_mics_are_documented_and_have_facts() -> None:
         assert entry.primary_mic == entry.mics[0]
         assert {facts.mic for facts in entry.mic_facts} == set(entry.mics)
         assert entry.default_currency in entry.supported_currencies
+
+
+def test_active_universe_row_currencies_are_catalog_supported() -> None:
+    db = _make_session()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+            ),
+            StockUniverse(
+                symbol="SAP.DE",
+                market="DE",
+                exchange="XETR",
+                currency="EUR",
+                timezone="Europe/Berlin",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+            ),
+        ]
+    )
+    db.commit()
+
+    assert _active_universe_currency_drift(db) == []
+    db.close()
+
+
+def test_active_universe_currency_drift_reports_unsupported_currency() -> None:
+    db = _make_session()
+    db.add(
+        StockUniverse(
+            symbol="BAD.HK",
+            market="HK",
+            exchange="XHKG",
+            currency="EUR",
+            timezone="Asia/Hong_Kong",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        )
+    )
+    db.commit()
+
+    assert _active_universe_currency_drift(db) == [
+        {
+            "symbol": "BAD.HK",
+            "market": "HK",
+            "currency": "EUR",
+            "supported_currencies": ("HKD",),
+        }
+    ]
+    db.close()
+
+
+def test_active_universe_timezone_drift_reports_mic_mismatch() -> None:
+    db = _make_session()
+    db.add_all(
+        [
+            StockUniverse(
+                symbol="0700.HK",
+                market="HK",
+                exchange="XHKG",
+                currency="HKD",
+                timezone="Asia/Hong_Kong",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+            ),
+            StockUniverse(
+                symbol="BAD.SI",
+                market="SG",
+                exchange="XSES",
+                currency="SGD",
+                timezone="Asia/Hong_Kong",
+                is_active=True,
+                status=UNIVERSE_STATUS_ACTIVE,
+            ),
+        ]
+    )
+    db.commit()
+
+    assert _active_universe_timezone_drift(db) == [
+        {
+            "symbol": "BAD.SI",
+            "market": "SG",
+            "mic": "XSES",
+            "timezone": "Asia/Hong_Kong",
+            "expected_timezone": "Asia/Singapore",
+        }
+    ]
+    db.close()
 
 
 def test_catalog_and_registry_exchange_alias_drift_is_documented() -> None:

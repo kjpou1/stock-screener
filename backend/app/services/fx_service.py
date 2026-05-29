@@ -2,7 +2,7 @@
 
 Primary responsibilities
 ------------------------
-- Resolve market -> currency (deterministic, no API call).
+- Resolve fallback market -> default currency for boot-time paths with no row.
 - Fetch/cache a daily USD conversion rate per currency.
 - Produce reproducible ``fx_metadata`` snapshots for persistence on
   ``StockFundamental`` rows.
@@ -45,6 +45,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
+from ..domain.markets.catalog import get_market_catalog
 from ..models.fx_rate import FXRate
 from .redis_pool import get_redis_client
 
@@ -53,30 +54,31 @@ logger = logging.getLogger(__name__)
 
 USD = "USD"
 
-# Market -> primary currency. Mirrors security_master_service._MARKET_DEFAULTS;
-# a drift-prevention test (test_fx_service.py::test_agrees_with_security_master_defaults)
-# fails CI if the two registries disagree.
+# Market -> default currency. This is a boot-time fallback only; FX enrichment
+# for persisted fundamentals must use StockUniverse.currency or row metadata.
+_MARKET_CATALOG = get_market_catalog()
 MARKET_CURRENCY_MAP: Mapping[str, str] = {
-    "US": "USD",
-    "HK": "HKD",
-    "IN": "INR",
-    "JP": "JPY",
-    "KR": "KRW",
-    "TW": "TWD",
-    "CN": "CNY",
-    "SG": "SGD",
-    "CA": "CAD",
-    "DE": "EUR",
+    market: _MARKET_CATALOG.get(market).default_currency
+    for market in _MARKET_CATALOG.supported_market_codes()
 }
 
-SUPPORTED_CURRENCIES = frozenset(MARKET_CURRENCY_MAP.values())
+SUPPORTED_CURRENCIES = frozenset(
+    currency
+    for market in _MARKET_CATALOG.supported_market_codes()
+    for currency in _MARKET_CATALOG.get(market).supported_currencies
+)
 
 
-def currency_for_market(market: str | None) -> str:
-    """Return the primary currency for ``market``; USD for unknowns."""
+def default_currency_for_market(market: str | None) -> str:
+    """Return the fallback default currency for ``market``; USD for unknowns."""
     if not market:
         return USD
     return MARKET_CURRENCY_MAP.get(market.strip().upper(), USD)
+
+
+def currency_for_market(market: str | None) -> str:
+    """Deprecated compatibility alias for ``default_currency_for_market``."""
+    return default_currency_for_market(market)
 
 
 RateFetcher = Callable[[str], Optional[float | Tuple[float, date] | Tuple[float, date, str]]]

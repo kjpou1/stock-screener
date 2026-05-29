@@ -47,6 +47,55 @@ def captured_record():
 
 
 class TestEnrichmentComputesUSDColumns:
+    def test_row_currency_wins_over_market_default(self, captured_record):
+        fake_db, captured = captured_record
+        fx = _make_fx({"NOK": 0.095, "EUR": 1.08})
+        service = FundamentalsCacheService(
+            redis_client=None,
+            session_factory=lambda: fake_db,
+            fx_service=fx,
+        )
+        payload = {
+            "currency": "NOK",
+            "market_cap": 1_000_000_000,
+            "shares_outstanding": 10_000_000,
+            "avg_volume": 500_000,
+        }
+
+        service._enrich_with_fx_normalization(payload, currency="NOK", market="DE")
+        service._store_in_database("OSLO.TEST", payload, data_source="yfinance", market="DE")
+
+        rec = captured["added_record"]
+        assert rec.market_cap_usd == 95_000_000
+        assert rec.adv_usd == 4_750_000
+        assert rec.fx_metadata["from_currency"] == "NOK"
+
+    def test_missing_row_currency_fails_closed_without_market_default(self):
+        fx = _make_fx({"HKD": 0.128})
+        service = FundamentalsCacheService(
+            redis_client=None,
+            session_factory=lambda: _dummy_session(),
+            fx_service=fx,
+        )
+        payload = {
+            "market_cap": 1_000_000_000,
+            "shares_outstanding": 10_000_000,
+            "avg_volume": 500_000,
+        }
+
+        service._enrich_with_fx_normalization(payload, currency=None, market="HK")
+
+        assert payload["market_cap_usd"] is None
+        assert payload["adv_usd"] is None
+        assert payload["fx_metadata"] == {
+            "from_currency": None,
+            "to_currency": "USD",
+            "rate": None,
+            "as_of_date": None,
+            "source": "missing_currency",
+            "market": "HK",
+        }
+
     def test_hk_payload_normalises_market_cap_and_adv(self, captured_record):
         fake_db, captured = captured_record
         fx = _make_fx({"HKD": 0.128})
@@ -62,7 +111,7 @@ class TestEnrichmentComputesUSDColumns:
             "avg_volume": 500_000,
         }
         # The public write path computes FX; drive it end-to-end.
-        service._enrich_with_fx_normalization(payload, market="HK")
+        service._enrich_with_fx_normalization(payload, currency="HKD", market="HK")
         service._store_in_database("0700.HK", payload, data_source="yfinance", market="HK")
 
         rec = captured["added_record"]
@@ -93,7 +142,7 @@ class TestEnrichmentComputesUSDColumns:
             "shares_outstanding": 100_000_000,
             "avg_volume": 2_000_000,
         }
-        service._enrich_with_fx_normalization(payload, market="US")
+        service._enrich_with_fx_normalization(payload, currency="USD", market="US")
         service._store_in_database("AAPL", payload, data_source="yfinance", market="US")
 
         rec = captured["added_record"]
@@ -117,7 +166,7 @@ class TestEnrichmentComputesUSDColumns:
             "shares_outstanding": 10_000_000,
             "avg_volume": 500_000,
         }
-        service._enrich_with_fx_normalization(payload, market="HK")
+        service._enrich_with_fx_normalization(payload, currency="HKD", market="HK")
         service._store_in_database("0700.HK", payload, data_source="yfinance", market="HK")
 
         rec = captured["added_record"]
@@ -142,7 +191,7 @@ class TestEnrichmentComputesUSDColumns:
             "shares_outstanding": None,
             "avg_volume": 500_000,
         }
-        service._enrich_with_fx_normalization(payload, market="HK")
+        service._enrich_with_fx_normalization(payload, currency="HKD", market="HK")
         service._store_in_database("0700.HK", payload, data_source="yfinance", market="HK")
 
         rec = captured["added_record"]

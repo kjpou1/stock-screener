@@ -1540,6 +1540,7 @@ def test_fetch_and_cache_normalizes_recommendation_before_writes(monkeypatch):
 
     captured_redis = {}
     captured_db = {}
+    captured_fx = {}
 
     monkeypatch.setattr(
         fundamentals_cache_module,
@@ -1552,6 +1553,7 @@ def test_fetch_and_cache_normalizes_recommendation_before_writes(monkeypatch):
 
     bootstrap_module.get_data_source_service = lambda: SimpleNamespace(
         get_fundamentals=lambda symbol, market=None: {
+            "currency": "HKD",
             "market_cap": 1000,
             "recommendation": "strong_buy",
             "data_source": "yfinance",
@@ -1560,7 +1562,13 @@ def test_fetch_and_cache_normalizes_recommendation_before_writes(monkeypatch):
     monkeypatch.setattr(service, "record_on_demand_fallback", lambda: None)
     monkeypatch.setattr(service, "_resolve_market", lambda symbol: "HK")
     monkeypatch.setattr(service, "_enrich_with_quality_metadata", lambda symbol, fundamentals, market: market)
-    monkeypatch.setattr(service, "_enrich_with_fx_normalization", lambda fundamentals, market: None)
+    monkeypatch.setattr(
+        service,
+        "_enrich_with_fx_normalization",
+        lambda fundamentals, currency, *, market=None: captured_fx.update(
+            {"currency": currency, "market": market}
+        ),
+    )
     monkeypatch.setattr(service, "_store_in_redis", lambda symbol, data: captured_redis.update({symbol: dict(data)}))
     monkeypatch.setattr(
         service,
@@ -1576,6 +1584,7 @@ def test_fetch_and_cache_normalizes_recommendation_before_writes(monkeypatch):
     assert captured_redis["0700.HK"]["recommendation"] == 1.0
     assert captured_db["0700.HK"]["data"]["recommendation"] == 1.0
     assert result["recommendation"] == 1.0
+    assert captured_fx == {"currency": "HKD", "market": "HK"}
 
 
 def test_deserialize_universe_row_infers_hk_from_xhkg_exchange():

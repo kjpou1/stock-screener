@@ -32,7 +32,7 @@ from .fundamentals_completeness import (
     derive_field_provenance,
 )
 from .field_capability_registry import field_capability_registry
-from .fx_service import FXQuote, FXService, currency_for_market, get_fx_service
+from .fx_service import FXQuote, FXService, get_fx_service
 from .institutional_ownership_service import InstitutionalOwnershipService
 from .redis_pool import get_redis_client, is_redis_enabled
 from .cache.market_cache_policy import MarketAwareCachePolicy, market_cache_policy
@@ -504,6 +504,7 @@ class FundamentalsCacheService:
         symbol: str,
         data: Dict,
         market: Optional[str],
+        currency: Optional[str] = None,
     ) -> bool:
         """Backfill derived metadata fields for older cache rows.
 
@@ -544,7 +545,11 @@ class FundamentalsCacheService:
             or not isinstance(data.get("fx_metadata"), dict)
         )
         if missing_fx_metadata:
-            self._enrich_with_fx_normalization(data, resolved_market)
+            self._enrich_with_fx_normalization(
+                data,
+                self._resolve_row_currency(symbol, data, currency=currency),
+                market=resolved_market,
+            )
             changed = changed or (
                 previous_fx_values
                 != (
@@ -569,7 +574,9 @@ class FundamentalsCacheService:
     def _enrich_with_fx_normalization(
         self,
         data: Dict,
-        market: Optional[str],
+        currency: Optional[str],
+        *,
+        market: Optional[str] = None,
     ) -> None:
         """Compute USD normalisation (``market_cap_usd``, ``adv_usd``) and
         attach an ``fx_metadata`` snapshot to ``data`` in place.
@@ -579,18 +586,24 @@ class FundamentalsCacheService:
         rate or missing source amounts → NULL USD columns (honest
         "unknown" rather than a fabricated zero).
         """
-        currency = currency_for_market(market)
+        row_currency = self._normalize_currency(currency)
         market_cap = data.get("market_cap")
         shares_out = data.get("shares_outstanding")
         avg_volume = data.get("avg_volume")
 
-        quote = self._get_fx_service().get_usd_rate(currency)
+        if row_currency is None:
+            data["market_cap_usd"] = None
+            data["adv_usd"] = None
+            data["fx_metadata"] = self._missing_currency_metadata(market)
+            return
+
+        quote = self._get_fx_service().get_usd_rate(row_currency)
         if quote is None:
             # Rate unavailable — leave USD columns NULL but record the
             # intent so consumers can see we tried.
             data["market_cap_usd"] = None
             data["adv_usd"] = None
-            data["fx_metadata"] = FXQuote.unavailable_metadata(currency)
+            data["fx_metadata"] = FXQuote.unavailable_metadata(row_currency)
             return
 
         rate = quote.rate
@@ -611,6 +624,39 @@ class FundamentalsCacheService:
             data["adv_usd"] = None
         data["fx_metadata"] = quote.to_metadata()
 
+    @staticmethod
+    def _normalize_currency(currency: Any) -> Optional[str]:
+        if not isinstance(currency, str):
+            return None
+        normalized = currency.strip().upper()
+        return normalized or None
+
+    @staticmethod
+    def _missing_currency_metadata(market: Optional[str]) -> Dict[str, Any]:
+        metadata = {
+            "from_currency": None,
+            "to_currency": "USD",
+            "rate": None,
+            "as_of_date": None,
+            "source": "missing_currency",
+        }
+        if market:
+            metadata["market"] = str(market).strip().upper()
+        return metadata
+
+    def _resolve_row_currency(
+        self,
+        symbol: str,
+        data: Dict,
+        *,
+        currency: Optional[str] = None,
+    ) -> Optional[str]:
+        return (
+            self._normalize_currency(currency)
+            or self._normalize_currency(data.get("currency"))
+            or self._resolve_currency(symbol)
+        )
+
     def _resolve_market(self, symbol: str) -> Optional[str]:
         """Look up the stock universe market for ``symbol``.
 
@@ -618,26 +664,60 @@ class FundamentalsCacheService:
         fails) — the routing policy treats ``None`` as the legacy US default
         so this never crashes on-demand fetches.
         """
+        market, _currency = self._resolve_market_and_currency(symbol)
+        return market
+
+    def _resolve_currency(self, symbol: str) -> Optional[str]:
+        """Look up the row currency for ``symbol`` from StockUniverse."""
+        _market, currency = self._resolve_market_and_currency(symbol)
+        return currency
+
+    def _resolve_market_and_currency(
+        self,
+        symbol: str,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Look up StockUniverse market/currency row facts for ``symbol``."""
         from ..models.stock_universe import StockUniverse
 
         db = None
         try:
             db = self._session_factory()
             row = (
-                db.query(StockUniverse.market)
+                db.query(StockUniverse.market, StockUniverse.currency)
                 .filter(StockUniverse.symbol == symbol)
                 .first()
             )
-            return row[0] if row else None
+            if not row:
+                return None, None
+            market = self._normalize_market_currency_row_value(row, 0, "market")
+            currency = self._normalize_market_currency_row_value(row, 1, "currency")
+            return market, currency
         except Exception as exc:  # pragma: no cover - DB hiccup shouldn't block fetch
             logger.debug(
-                "Market lookup failed for %s (%s) - defaulting to US policy",
+                "Universe market/currency lookup failed for %s (%s)",
                 symbol, exc,
             )
-            return None
+            return None, None
         finally:
             if db is not None:
                 db.close()
+
+    @staticmethod
+    def _normalize_market_currency_row_value(
+        row: Any,
+        index: int,
+        attr: str,
+    ) -> Optional[str]:
+        value = getattr(row, attr, None)
+        if value is None:
+            try:
+                value = row[index]
+            except (IndexError, KeyError, TypeError):
+                return None
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().upper()
+        return normalized or None
 
     def _fetch_and_cache(
         self,
@@ -689,7 +769,11 @@ class FundamentalsCacheService:
             # Enrich with completeness/provenance so both Redis and DB writes
             # include the derived metadata (avoids warm-read staleness).
             market = self._enrich_with_quality_metadata(symbol, fundamentals, market)
-            self._enrich_with_fx_normalization(fundamentals, market)
+            self._enrich_with_fx_normalization(
+                fundamentals,
+                self._resolve_row_currency(symbol, fundamentals),
+                market=market,
+            )
 
             # Cache in Redis (7-day TTL)
             self._store_in_redis_for_market(symbol, fundamentals, market=market)
@@ -1549,7 +1633,11 @@ class FundamentalsCacheService:
 
         # Enrich before Redis/DB writes so both see the same snapshot.
         market = self._enrich_with_quality_metadata(symbol, normalized_data, market)
-        self._enrich_with_fx_normalization(normalized_data, market)
+        self._enrich_with_fx_normalization(
+            normalized_data,
+            self._resolve_row_currency(symbol, normalized_data),
+            market=market,
+        )
 
         # Store in Redis
         self._store_in_redis_for_market(symbol, normalized_data, market=market)

@@ -22,6 +22,7 @@ def test_backfill_repairs_all_derived_metadata_fields():
         fx_service=fx_service,
     )
     payload = {
+        "currency": "HKD",
         "market_cap": 1_000_000_000,
         "shares_outstanding": 1_000_000,
         "avg_volume": 2_000_000,
@@ -62,6 +63,7 @@ def test_backfill_repairs_none_placeholder_values():
         fx_service=fx_service,
     )
     payload = {
+        "currency": "HKD",
         "market_cap": 1_000_000_000,
         "shares_outstanding": 1_000_000,
         "avg_volume": 2_000_000,
