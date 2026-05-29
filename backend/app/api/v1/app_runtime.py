@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ...domain.markets.catalog import get_market_catalog
-from ...domain.universe.runtime_options import build_runtime_universe_options_payload
 from ...domain.scanning.defaults import get_default_scan_profile
 from ...database import get_db
 from ...schemas.app_runtime import (
@@ -25,6 +24,7 @@ from ...services.runtime_preferences_service import (
     get_runtime_bootstrap_status,
     save_runtime_preferences,
 )
+from ...services.runtime_universe_options import build_runtime_universe_options_payload
 from ...services.market_activity_service import get_runtime_activity_status
 from ...tasks.runtime_bootstrap_tasks import queue_local_runtime_bootstrap
 

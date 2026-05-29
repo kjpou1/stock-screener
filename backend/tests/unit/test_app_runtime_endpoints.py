@@ -5,12 +5,16 @@ from __future__ import annotations
 import httpx
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 
 from app.database import get_db
 from app.domain.markets.catalog import get_market_catalog
 from app.domain.scanning.defaults import get_default_scan_profile
 from app.main import app
-from app.schemas.app_runtime import MarketCatalogEntryResponse
+from app.schemas.app_runtime import (
+    MarketCatalogEntryResponse,
+    RuntimeUniverseSelectionResponse,
+)
 
 
 class _FakeUISnapshotService:
@@ -172,6 +176,17 @@ async def test_app_capabilities_exposes_catalog_backed_universe_options(client, 
         assert "scan_ready" not in market
         assert "status" not in market
         assert "bootstrap_state" not in market
+
+
+def test_runtime_universe_option_rejects_invalid_universe_definition():
+    with pytest.raises(ValidationError):
+        RuntimeUniverseSelectionResponse.model_validate(
+            {
+                "value": "market:NOPE",
+                "label": "Invalid market",
+                "universe_def": {"type": "market", "market": "NOPE"},
+            }
+        )
 
 
 def test_market_catalog_runtime_schema_requires_canonical_market_facts():

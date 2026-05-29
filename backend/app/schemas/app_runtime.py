@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from app.domain.markets.catalog import get_market_catalog
+from app.schemas.universe import UniverseDefinition
 
 
 def _supported_market_codes() -> list[str]:
@@ -86,7 +87,15 @@ class RuntimeUniverseSelectionResponse(BaseModel):
 
     value: str
     label: str
-    universe_def: dict[str, Any]
+    universe_def: UniverseDefinition
+
+    @field_serializer("universe_def", when_used="json")
+    def serialize_universe_def(self, value: UniverseDefinition) -> dict[str, Any]:
+        return value.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude_defaults=True,
+        )
 
 
 class RuntimeMicUniverseOptionResponse(RuntimeUniverseSelectionResponse):
@@ -96,14 +105,11 @@ class RuntimeMicUniverseOptionResponse(RuntimeUniverseSelectionResponse):
     aliases: list[str] = Field(default_factory=list)
 
 
-class RuntimeMicAliasOptionResponse(BaseModel):
+class RuntimeMicAliasOptionResponse(RuntimeUniverseSelectionResponse):
     """Market-scoped compatibility alias for a canonical MIC option."""
 
-    value: str
     alias: str
     mic: str
-    label: str
-    universe_def: dict[str, Any]
 
 
 class RuntimeIndexUniverseOptionResponse(RuntimeUniverseSelectionResponse):
