@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
+
 import pytest
 
 from app.domain.universe.ingestion import (
@@ -58,6 +60,7 @@ def test_canonical_universe_row_normalizes_identity_and_preserves_symbol() -> No
 
 
 def test_canonical_universe_row_defaults_mic_facts_when_currency_timezone_absent() -> None:
+    first_seen_at = datetime(2026, 5, 28, 8, 30, tzinfo=UTC)
     row = CanonicalUniverseRow(
         symbol="D05.SI",
         name="DBS Group",
@@ -67,18 +70,49 @@ def test_canonical_universe_row_defaults_mic_facts_when_currency_timezone_absent
         currency=None,
         timezone=None,
         listing_tier="Catalist",
-        lifecycle=UniverseLifecycleMetadata.active(),
+        lifecycle=UniverseLifecycleMetadata(
+            first_seen_at=first_seen_at,
+            last_seen_in_source_at=first_seen_at,
+        ),
         provenance=UniverseSourceProvenance(
             source_name="sgx_official",
             source_symbol="D05",
             source_row_number=1,
             snapshot_id="sgx-2026-05-28",
+            snapshot_as_of=date(2026, 5, 28),
         ),
     )
 
     assert row.currency == "SGD"
     assert row.timezone == "Asia/Singapore"
     assert row.listing_tier == "catalist"
+    assert row.lifecycle.first_seen_at is first_seen_at
+    assert row.provenance.snapshot_as_of == date(2026, 5, 28)
+
+
+def test_canonical_universe_models_reject_loose_boundary_types() -> None:
+    with pytest.raises(ValueError, match="first_seen_at must be a datetime"):
+        UniverseLifecycleMetadata(first_seen_at="2026-05-28")  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="snapshot_as_of must be a date"):
+        UniverseSourceProvenance(
+            source_name="sgx_official",
+            snapshot_id="sgx-2026-05-28",
+            snapshot_as_of=datetime(2026, 5, 28, 8, 30, tzinfo=UTC),
+        )
+
+    with pytest.raises(ValueError, match="source_metadata.bad must be JSON-compatible"):
+        UniverseSourceProvenance(
+            source_name="sgx_official",
+            snapshot_id="sgx-2026-05-28",
+            source_metadata={"bad": object()},  # type: ignore[dict-item]
+        )
+
+    with pytest.raises(ValueError, match="source_name must be text"):
+        UniverseSourceProvenance(
+            source_name=123,  # type: ignore[arg-type]
+            snapshot_id="sgx-2026-05-28",
+        )
 
 
 def test_canonical_ingestion_result_rejects_duplicate_active_market_mic_local_code() -> None:
@@ -151,6 +185,5 @@ def test_canonical_ingestion_result_allows_inactive_duplicate_identity() -> None
     )
 
     assert result.canonical_rows == (active, inactive)
-    assert result.rows == (active, inactive)
     assert result.rejected_count == 1
     assert inactive.active_identity_key is None
