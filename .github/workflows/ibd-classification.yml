@@ -64,9 +64,96 @@ jobs:
             --title "IBD Classification Data" \
             --notes "Automated hybrid IBD industry-group classifications for static-site builds."
 
-  classify:
+  # The deterministic crosswalk is US-derived (curated CSV ∩ US universe), so it
+  # is built once here and shared with every per-market classify job as an
+  # artifact rather than rebuilt per job. Best-effort: if the US weekly-reference
+  # bundle is unavailable, no artifact is produced and classify degrades to
+  # embedding+LLM.
+  build_crosswalk:
     if: ${{ (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     needs: ensure_release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: stockscanner
+          POSTGRES_USER: stockscanner
+          POSTGRES_PASSWORD: stockscanner
+        options: >-
+          --health-cmd "pg_isready -U stockscanner -d stockscanner"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      REDIS_ENABLED: "false"
+      DATABASE_URL: postgresql://stockscanner:stockscanner@localhost:5432/stockscanner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Seed US weekly reference bundle
+        id: seed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/weekly-reference-seed
+          BUNDLE_ASSET_NAME=""
+          if gh release download weekly-reference-data \
+            --pattern "weekly-reference-latest-us.json" \
+            --dir /tmp/weekly-reference-seed >/dev/null 2>&1; then
+            MANIFEST=/tmp/weekly-reference-seed/weekly-reference-latest-us.json
+          elif gh release download weekly-reference-data \
+            --pattern "weekly-reference-latest.json" \
+            --dir /tmp/weekly-reference-seed >/dev/null 2>&1; then
+            MANIFEST=/tmp/weekly-reference-seed/weekly-reference-latest.json
+          else
+            MANIFEST=""
+          fi
+          if [ -n "$MANIFEST" ]; then
+            BUNDLE_ASSET_NAME="$(python -c "import json,sys;print(json.load(open(sys.argv[1]))['bundle_asset_name'])" "$MANIFEST")"
+          fi
+          if [ -n "$BUNDLE_ASSET_NAME" ] && gh release download weekly-reference-data \
+            --pattern "$BUNDLE_ASSET_NAME" \
+            --dir /tmp/weekly-reference-seed >/dev/null 2>&1; then
+            cd backend
+            python -m app.scripts.import_weekly_reference_bundle \
+              --input "/tmp/weekly-reference-seed/${BUNDLE_ASSET_NAME}" \
+              --hydrate-mode full
+            echo "seeded=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No US weekly reference bundle available; skipping crosswalk build."
+            echo "seeded=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build crosswalk from curated CSV + US universe
+        if: ${{ steps.seed.outputs.seeded == 'true' }}
+        continue-on-error: true
+        run: |
+          cd backend
+          python -m app.scripts.load_ibd_industry_groups
+          python -m app.scripts.build_ibd_crosswalk
+
+      - name: Upload crosswalk artifact
+        if: ${{ steps.seed.outputs.seeded == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ibd-crosswalk
+          path: data/ibd_crosswalk.json
+          if-no-files-found: warn
+
+  classify:
+    if: ${{ (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    needs: [ensure_release, build_crosswalk]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -109,6 +196,16 @@ jobs:
 
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt
+
+      # Pull the shared US-derived crosswalk into data/ where
+      # build_ibd_classification_bundle expects it. Non-fatal: if the prep job
+      # produced none, the cascade runs embedding+LLM only.
+      - name: Download IBD crosswalk
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ibd-crosswalk
+          path: data
 
       - name: Seed weekly reference bundle (universe to classify)
         id: seed
