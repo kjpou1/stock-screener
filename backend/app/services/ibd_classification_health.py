@@ -109,3 +109,41 @@ def write_health_report(path: Path, report: dict) -> None:
 
 def read_health_report(path: Path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+@dataclass
+class GateResult:
+    passed: bool
+    mode: str
+    breaches: list[str]
+
+
+def evaluate_gate(
+    report: dict,
+    *,
+    max_churn_pct: float,
+    min_coverage_pct: float,
+    mode: str,
+) -> GateResult:
+    """Evaluate coverage + churn thresholds.
+
+    mode="off"     -> never blocks, no breaches reported.
+    mode="warn"    -> breaches reported, but passed is always True.
+    mode="enforce" -> passed is False when any threshold is breached.
+    """
+    if mode == "off":
+        return GateResult(passed=True, mode=mode, breaches=[])
+
+    breaches: list[str] = []
+    coverage = (report.get("summary") or {}).get("coverage_pct", 0.0)
+    if coverage < min_coverage_pct:
+        breaches.append(f"coverage {coverage}% < min {min_coverage_pct}%")
+
+    diff = report.get("diff")
+    if diff is not None:
+        churn = diff.get("churn_pct", 0.0)
+        if churn > max_churn_pct:
+            breaches.append(f"churn {churn}% > max {max_churn_pct}%")
+
+    passed = (not breaches) if mode == "enforce" else True
+    return GateResult(passed=passed, mode=mode, breaches=breaches)

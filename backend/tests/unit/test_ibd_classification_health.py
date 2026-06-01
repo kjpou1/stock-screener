@@ -5,9 +5,11 @@ from app.services.ibd_classification_health import (
     build_health_report,
     confidence_histogram,
     diff_classifications,
+    evaluate_gate,
     health_asset_name,
     read_health_report,
     write_health_report,
+    GateResult,
 )
 
 
@@ -119,3 +121,47 @@ def test_health_asset_name_and_roundtrip(tmp_path):
     write_health_report(path, report)
     assert path.read_text().endswith("\n")
     assert read_health_report(path) == report
+
+
+_OK = {"summary": {"coverage_pct": 96.0}, "diff": {"churn_pct": 3.0}}
+_HIGH_CHURN = {"summary": {"coverage_pct": 96.0}, "diff": {"churn_pct": 40.0}}
+_LOW_COVERAGE = {"summary": {"coverage_pct": 40.0}, "diff": None}
+
+
+def test_gate_passes_within_thresholds():
+    res = evaluate_gate(_OK, max_churn_pct=25, min_coverage_pct=50, mode="enforce")
+    assert isinstance(res, GateResult)
+    assert res.passed
+    assert res.breaches == []
+
+
+def test_gate_enforce_fails_on_high_churn():
+    res = evaluate_gate(_HIGH_CHURN, max_churn_pct=25, min_coverage_pct=50, mode="enforce")
+    assert not res.passed
+    assert any("churn" in b for b in res.breaches)
+
+
+def test_gate_enforce_fails_on_low_coverage():
+    res = evaluate_gate(_LOW_COVERAGE, max_churn_pct=25, min_coverage_pct=50, mode="enforce")
+    assert not res.passed
+    assert any("coverage" in b for b in res.breaches)
+
+
+def test_gate_warn_mode_reports_but_passes():
+    res = evaluate_gate(_HIGH_CHURN, max_churn_pct=25, min_coverage_pct=50, mode="warn")
+    assert res.passed                 # warn never blocks
+    assert res.breaches               # but breaches are still surfaced
+
+
+def test_gate_off_mode_always_passes_with_no_breaches():
+    res = evaluate_gate(_HIGH_CHURN, max_churn_pct=25, min_coverage_pct=50, mode="off")
+    assert res.passed
+    assert res.breaches == []
+
+
+def test_gate_null_diff_skips_churn_check():
+    res = evaluate_gate(
+        {"summary": {"coverage_pct": 96.0}, "diff": None},
+        max_churn_pct=25, min_coverage_pct=50, mode="enforce",
+    )
+    assert res.passed
