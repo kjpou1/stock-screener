@@ -165,8 +165,10 @@ class IBDIndustryService:
                     'source': 'csv',
                 })
                 if len(batch) >= 500:
+                    # bulk_insert_mappings emits the INSERT immediately within the
+                    # open transaction; the single commit below makes the whole
+                    # delete+reload atomic.
                     db.bulk_insert_mappings(IBDIndustryGroup, batch)
-                    db.flush()
                     loaded += len(batch)
                     logger.info(f"Loaded {loaded} IBD industry mappings...")
                     batch = []

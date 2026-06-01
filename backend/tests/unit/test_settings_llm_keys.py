@@ -151,9 +151,6 @@ def test_ibd_industry_loader_falls_back_to_project_data_when_override_is_missing
 
             return _Q()
 
-        def flush(self) -> None:
-            pass
-
         def rollback(self) -> None:
             self.rollback_calls += 1
 
@@ -204,9 +201,6 @@ def test_ibd_industry_loader_does_not_fallback_for_explicit_missing_path(
 
         def bulk_insert_mappings(self, model, rows) -> None:
             raise AssertionError(f"Unexpected bulk insert for {model}: {rows}")
-
-        def flush(self) -> None:
-            pass
 
         def rollback(self) -> None:
             self.rollback_calls += 1
@@ -278,9 +272,6 @@ def test_ibd_industry_loader_treats_empty_csv_path_as_unset(
                     return []
 
             return _Q()
-
-        def flush(self) -> None:
-            pass
 
         def rollback(self) -> None:
             self.rollback_calls += 1
