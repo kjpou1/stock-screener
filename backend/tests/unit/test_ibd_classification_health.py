@@ -1,4 +1,7 @@
 """Unit tests for the IBD classification health report + gate (pure, no DB)."""
+import json
+
+from app.scripts.check_ibd_classification_gate import main as gate_main
 from app.services.ibd_classification_health import (
     HEALTH_REPORT_SCHEMA_VERSION,
     HISTOGRAM_BINS,
@@ -165,3 +168,39 @@ def test_gate_null_diff_skips_churn_check():
         max_churn_pct=25, min_coverage_pct=50, mode="enforce",
     )
     assert res.passed
+
+
+def _write_report(tmp_path, report):
+    path = tmp_path / "ibd-classification-health-hk.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+    return str(path)
+
+
+def test_gate_cli_enforce_returns_1_on_breach(tmp_path, capsys):
+    report = {"market": "HK", "summary": {"coverage_pct": 40.0}, "diff": None}
+    rc = gate_main([
+        "--health", _write_report(tmp_path, report),
+        "--max-churn-pct", "25", "--min-coverage-pct", "50", "--mode", "enforce",
+    ])
+    assert rc == 1
+    assert "::error::" in capsys.readouterr().out
+
+
+def test_gate_cli_warn_returns_0_but_warns(tmp_path, capsys):
+    report = {"market": "HK", "summary": {"coverage_pct": 40.0}, "diff": None}
+    rc = gate_main([
+        "--health", _write_report(tmp_path, report),
+        "--max-churn-pct", "25", "--min-coverage-pct", "50", "--mode", "warn",
+    ])
+    assert rc == 0
+    assert "::warning::" in capsys.readouterr().out
+
+
+def test_gate_cli_ok_returns_0(tmp_path, capsys):
+    report = {"market": "HK", "summary": {"coverage_pct": 96.0}, "diff": {"churn_pct": 2.0}}
+    rc = gate_main([
+        "--health", _write_report(tmp_path, report),
+        "--max-churn-pct", "25", "--min-coverage-pct", "50", "--mode", "enforce",
+    ])
+    assert rc == 0
+    assert "gate: OK" in capsys.readouterr().out
