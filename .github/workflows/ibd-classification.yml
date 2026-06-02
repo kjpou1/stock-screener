@@ -193,6 +193,9 @@ jobs:
       IBD_LLM_API_BASE: ${{ vars.IBD_LLM_API_BASE }}
       IBD_LLM_MODEL: ${{ vars.IBD_LLM_MODEL }}
       IBD_LLM_API_KEY: ${{ secrets.IBD_LLM_API_KEY }}
+      # Per-call timeout (seconds) so a hung request can't exceed the job cap;
+      # unset → 30s default in build_ibd_tiebreaker.
+      IBD_LLM_TIMEOUT: ${{ vars.IBD_LLM_TIMEOUT }}
 
     steps:
       - uses: actions/checkout@v4
