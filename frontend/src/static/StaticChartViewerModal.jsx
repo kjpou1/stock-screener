@@ -330,6 +330,8 @@ function StaticChartViewerModal({
                   visibleRange={visibleRange}
                   onVisibleRangeChange={setVisibleRange}
                   priceData={chartPayload?.bars || []}
+                  rsLineData={chartPayload?.rs_line || null}
+                  blueDots={chartPayload?.blue_dots || null}
                   dataUpdatedAtOverride={dataUpdatedAtOverride}
                 />
               ) : (

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """Stock data API endpoints"""
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -37,6 +37,7 @@ from ...wiring.bootstrap import (
     get_uow,
     get_yfinance_service,
 )
+from ._price_history import PERIOD_DAYS, dataframe_to_points, resolve_symbol_market
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -68,21 +69,8 @@ def _build_data_fetcher(db: Session):
     )
 
 
-def _resolve_symbol_market(db: Session, symbol: str) -> str | None:
-    market = (
-        db.query(StockUniverse.market)
-        .filter(
-            StockUniverse.active_filter(),
-            StockUniverse.symbol == symbol.upper(),
-        )
-        .scalar()
-    )
-    normalized = str(market or "").strip().upper()
-    return normalized or None
-
-
 def _get_latest_feature_run_for_symbol(uow, db: Session, symbol: str):
-    market = _resolve_symbol_market(db, symbol)
+    market = resolve_symbol_market(db, symbol)
     if market is not None:
         latest_run = uow.feature_runs.get_latest_published(
             pointer_key=f"latest_published_market:{market}"
@@ -148,54 +136,10 @@ def _get_stock_technicals_payload(
     return fetcher.get_stock_technicals(symbol.upper(), force_refresh=force_refresh)
 
 
-_PERIOD_DAYS = {
-    "1mo": 30,
-    "3mo": 90,
-    "6mo": 180,
-    "1y": 365,
-    "2y": 730,
-    "5y": 1825,
-}
-
-
-def _dataframe_to_points(data, days: int) -> list[dict]:
-    """Filter an OHLCV DataFrame to the last N days and convert to JSON-ready dicts."""
-
-    import pandas as pd
-
-    if data is None or len(data) == 0:
-        return []
-
-    cutoff_date = pd.Timestamp(datetime.now() - timedelta(days=days))
-    if data.index.tz is not None:
-        cutoff_date = cutoff_date.tz_localize(data.index.tz)
-
-    filtered = data[data.index >= cutoff_date]
-    if len(filtered) == 0:
-        return []
-
-    df = filtered.reset_index()
-    date_col = df.columns[0]
-    df = df.rename(columns={date_col: "Date"})
-    df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
-
-    return [
-        {
-            "date": row["Date"],
-            "open": round(float(row["Open"]), 2),
-            "high": round(float(row["High"]), 2),
-            "low": round(float(row["Low"]), 2),
-            "close": round(float(row["Close"]), 2),
-            "volume": int(row["Volume"]),
-        }
-        for _, row in df.iterrows()
-    ]
-
-
 def _load_price_history(symbol: str, period: str = "6mo") -> list[dict]:
     """Get historical price data (OHLCV only) from cache."""
 
-    days = _PERIOD_DAYS.get(period)
+    days = PERIOD_DAYS.get(period)
     if days is None:
         raise HTTPException(status_code=422, detail=f"Unsupported period: {period}")
 
@@ -210,7 +154,7 @@ def _load_price_history(symbol: str, period: str = "6mo") -> list[dict]:
             detail=f"Historical data not available for {symbol}. Run a scan to populate cache.",
         )
 
-    result = _dataframe_to_points(data, days)
+    result = dataframe_to_points(data, days)
     if not result:
         raise HTTPException(
             status_code=404,
@@ -901,7 +845,7 @@ async def get_price_history_batch(payload: PriceHistoryBatchRequest):
     whose data is available under the `data` map.
     """
 
-    days = _PERIOD_DAYS.get(payload.period)
+    days = PERIOD_DAYS.get(payload.period)
     if days is None:
         raise HTTPException(
             status_code=422, detail=f"Unsupported period: {payload.period}"
@@ -934,7 +878,7 @@ async def get_price_history_batch(payload: PriceHistoryBatchRequest):
     missing: list[str] = []
     for sym in normalized:
         df = frames.get(sym) if isinstance(frames, dict) else None
-        points = _dataframe_to_points(df, days)
+        points = dataframe_to_points(df, days)
         if points:
             data[sym] = points
         else:

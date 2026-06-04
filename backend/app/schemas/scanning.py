@@ -115,6 +115,7 @@ class ScanResultItem(BaseModel):
     se_up_down_volume_ratio_10d: Optional[float] = None
     se_quiet_days_10d: Optional[float] = None
     se_rs_line_new_high: Optional[bool] = None
+    se_rs_line_blue_dot: Optional[bool] = None
     se_pivot_price: Optional[float] = None
     se_setup_ready: Optional[bool] = None
     se_quality_score: Optional[float] = None
@@ -265,6 +266,7 @@ class ScanResultItem(BaseModel):
             se_up_down_volume_ratio_10d=ef.get("se_up_down_volume_ratio_10d"),
             se_quiet_days_10d=ef.get("se_quiet_days_10d"),
             se_rs_line_new_high=ef.get("se_rs_line_new_high"),
+            se_rs_line_blue_dot=ef.get("se_rs_line_blue_dot"),
             se_pivot_price=ef.get("se_pivot_price"),
             se_setup_ready=ef.get("se_setup_ready"),
             se_quality_score=ef.get("se_quality_score"),

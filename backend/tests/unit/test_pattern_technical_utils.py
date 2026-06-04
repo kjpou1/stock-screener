@@ -5,14 +5,34 @@ import pandas as pd
 import pytest
 
 from app.analysis.patterns.technicals import (
+    at_new_high,
     average_true_range,
     bollinger_band_width_percent,
     detect_swings,
     resample_ohlcv,
+    rolling_at_new_high,
     rolling_linear_regression,
     rolling_percentile_rank,
     true_range_percent,
 )
+
+
+def _new_high_series(values) -> pd.Series:
+    return pd.Series([float(v) for v in values], index=pd.bdate_range("2026-01-05", periods=len(values)))
+
+
+def test_at_new_high_detects_trailing_max_at_last_point():
+    assert at_new_high(_new_high_series([1.0, 2.0, 3.0]), window=252) is True
+    assert at_new_high(_new_high_series([1.0, 3.0, 2.0]), window=252) is False
+
+
+def test_at_new_high_is_false_on_empty_series():
+    assert at_new_high(_new_high_series([]), window=252) is False
+
+
+def test_rolling_at_new_high_flags_each_running_max():
+    result = rolling_at_new_high(_new_high_series([1.0, 2.0, 1.5, 3.0]), window=252)
+    assert result.tolist() == [True, True, False, True]
 
 
 def _sample_ohlcv() -> pd.DataFrame:

@@ -60,6 +60,7 @@ SCALAR_FILTER_TO_FIELD: dict[str, str] = {
 BOOLEAN_FILTER_TO_FIELD: dict[str, str] = {
     "seSetupReady": "se_setup_ready",
     "seRsLineNewHigh": "se_rs_line_new_high",
+    "seRsLineBlueDot": "se_rs_line_blue_dot",
     "vcpDetected": "vcp_detected",
     "vcpReady": "vcp_ready_for_breakout",
     "maAlignment": "ma_alignment",
@@ -119,6 +120,20 @@ PRESET_SCREENS: list[dict] = [
             "minerviniScore": {"min": 50, "max": None},
         },
         "sort_by": "vcp_score",
+        "sort_order": "desc",
+    },
+    {
+        "id": "blue_dot_leaders",
+        "name": "Blue Dot Leaders",
+        "short_name": "Blue Dots",
+        "description": "Stage 2 leaders whose RS line hit a new high before price — emerging leadership ahead of the breakout",
+        "tier": 1,
+        "filters": {
+            "stage": 2,
+            "seRsLineBlueDot": True,
+            "rsRating": {"min": 80, "max": None},
+        },
+        "sort_by": "rs_rating",
         "sort_order": "desc",
     },
     {

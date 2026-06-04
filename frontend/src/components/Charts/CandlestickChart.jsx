@@ -1,8 +1,8 @@
 import { useRef, useEffect, useLayoutEffect, useState, useMemo } from 'react';
-import { createChart, CrosshairMode, CandlestickSeries, LineSeries, HistogramSeries } from 'lightweight-charts';
+import { createChart, CrosshairMode, CandlestickSeries, LineSeries, HistogramSeries, createSeriesMarkers } from 'lightweight-charts';
 import { Box, CircularProgress, Alert, AlertTitle, Button, ToggleButtonGroup, ToggleButton, useTheme, Skeleton, Typography } from '@mui/material';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchPriceHistory, priceHistoryKeys, PRICE_HISTORY_STALE_TIME } from '../../api/priceHistory';
+import { fetchPriceHistory, fetchRSLine, priceHistoryKeys, PRICE_HISTORY_STALE_TIME } from '../../api/priceHistory';
 
 /**
  * Chart skeleton placeholder that shows chart structure while loading
@@ -305,6 +305,8 @@ function CandlestickChart({
   visibleRange = null,
   onVisibleRangeChange = null,
   priceData = null,
+  rsLineData = null,
+  blueDots = null,
   dataUpdatedAtOverride = null,
   compact = false,
   hideTimeframeToggle = false,
@@ -317,6 +319,8 @@ function CandlestickChart({
   const ema10SeriesRef = useRef(null);
   const ema20SeriesRef = useRef(null);
   const ema50SeriesRef = useRef(null);
+  const rsLineSeriesRef = useRef(null); // RS line (stock / benchmark) overlay
+  const rsMarkersRef = useRef(null); // Blue-dot markers primitive on the RS line
   const prevSymbolRef = useRef(null); // Track previous symbol
   const shouldRestoreRangeRef = useRef(false); // Flag to restore range on next data update
   const isFirstDataLoadRef = useRef(true); // Track first data load
@@ -324,6 +328,7 @@ function CandlestickChart({
   const latestCandleRef = useRef(null); // Store latest candle for default display
 
   const [timeframe, setTimeframe] = useState('daily');
+  const [showRSLine, setShowRSLine] = useState(true); // RS line overlay toggle
   const [legendData, setLegendData] = useState(null); // OHLC legend data on hover
   const theme = useTheme();
   const isDarkMode = theme.palette.mode === 'dark';
@@ -352,6 +357,29 @@ function CandlestickChart({
     // Show stale/cached data immediately while fetching fresh data
     placeholderData: getCachedData,
   });
+
+  // Live RS line + blue-dot dates (interactive surfaces only). Static charts
+  // carry the RS payload in their bundle instead, so the query stays disabled.
+  const { data: fetchedRsData } = useQuery({
+    queryKey: priceHistoryKeys.rsLine(symbol, period),
+    queryFn: () => fetchRSLine(symbol, period),
+    enabled: !!symbol && !priceData && !compact && showRSLine,
+    staleTime: PRICE_HISTORY_STALE_TIME,
+    keepPreviousData: true,
+  });
+
+  // RS data source: bundled payload in static mode, live query otherwise.
+  const rsData = useMemo(() => {
+    if (priceData) {
+      return Array.isArray(rsLineData) && rsLineData.length > 0
+        ? { rs_line: rsLineData, blue_dots: blueDots || [] }
+        : null;
+    }
+    return fetchedRsData;
+  }, [priceData, rsLineData, blueDots, fetchedRsData]);
+
+  // Whether the RS overlay can render at all here (drives the toggle's visibility).
+  const rsAvailable = !priceData || (Array.isArray(rsLineData) && rsLineData.length > 0);
 
   const apiData = priceData ?? fetchedApiData;
   const effectiveDataUpdatedAt = dataUpdatedAtOverride ?? dataUpdatedAt;
@@ -483,6 +511,23 @@ function CandlestickChart({
     });
     ema50SeriesRef.current = ema50Series;
 
+    // Create RS line series on its own overlay price scale so the ratio doesn't
+    // distort the price axis. The scale floats in the upper band and stays
+    // hidden (no axis labels). Blue-dot markers attach to this series.
+    const rsLineSeries = chart.addSeries(LineSeries, {
+      color: '#FFA726', // orange — distinct from the green/cyan EMAs
+      lineWidth: 2,
+      priceScaleId: 'rs',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    rsLineSeries.priceScale().applyOptions({
+      scaleMargins: { top: 0.05, bottom: 0.55 },
+      visible: false,
+    });
+    rsLineSeriesRef.current = rsLineSeries;
+    rsMarkersRef.current = createSeriesMarkers(rsLineSeries, []);
+
     // Subscribe to crosshair move for OHLC legend (skip in compact mode — legend is hidden)
     if (!compact) chart.subscribeCrosshairMove((param) => {
       if (!param.time || !param.seriesData || !candlestickSeriesRef.current) {
@@ -535,6 +580,8 @@ function CandlestickChart({
       ema10SeriesRef.current = null;
       ema20SeriesRef.current = null;
       ema50SeriesRef.current = null;
+      rsLineSeriesRef.current = null;
+      rsMarkersRef.current = null;
     };
     // `interactive` is intentionally not in the deps: it's only used as the
     // chart's initial handleScroll/handleScale value here, and the dedicated
@@ -665,6 +712,32 @@ function CandlestickChart({
     // Otherwise, don't touch the zoom - let user adjust freely
   }, [chartData, visibleRange]);
 
+  // Update the RS line overlay + blue-dot markers.
+  // Only rendered on the daily timeframe (the RS series is daily); cleared
+  // otherwise so stale points never linger under weekly candles.
+  useEffect(() => {
+    const series = rsLineSeriesRef.current;
+    const markers = rsMarkersRef.current;
+    if (!series || !chartRef.current) return;
+
+    const points = Array.isArray(rsData?.rs_line) ? rsData.rs_line : [];
+    const shouldShow = showRSLine && effectiveTimeframe === 'daily' && points.length > 0;
+
+    if (!shouldShow) {
+      series.setData([]);
+      if (markers) markers.setMarkers([]);
+      return;
+    }
+
+    series.setData(points.map((p) => ({ time: p.time, value: p.value })));
+
+    const timesInSeries = new Set(points.map((p) => p.time));
+    const markerList = (rsData.blue_dots || [])
+      .filter((t) => timesInSeries.has(t))
+      .map((t) => ({ time: t, position: 'inBar', color: '#2196f3', shape: 'circle' }));
+    if (markers) markers.setMarkers(markerList);
+  }, [rsData, showRSLine, effectiveTimeframe]);
+
   // Determine overlay state
   // Only show full loading state if we have no data at all (not even placeholder)
   const hasData = chartData && chartData.candlesticks.length > 0;
@@ -697,19 +770,36 @@ function CandlestickChart({
             boxShadow: 1,
           }}
         >
-          <ToggleButtonGroup
-            value={timeframe}
-            exclusive
-            onChange={(e, newTimeframe) => {
-              if (newTimeframe !== null) {
-                setTimeframe(newTimeframe);
-              }
-            }}
-            size="small"
-          >
-            <ToggleButton value="daily">Daily</ToggleButton>
-            <ToggleButton value="weekly">Weekly</ToggleButton>
-          </ToggleButtonGroup>
+          <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <ToggleButtonGroup
+              value={timeframe}
+              exclusive
+              onChange={(e, newTimeframe) => {
+                if (newTimeframe !== null) {
+                  setTimeframe(newTimeframe);
+                }
+              }}
+              size="small"
+            >
+              <ToggleButton value="daily">Daily</ToggleButton>
+              <ToggleButton value="weekly">Weekly</ToggleButton>
+            </ToggleButtonGroup>
+            {/* RS line overlay toggle — shown only where RS data can load
+                (live charts, or static charts whose bundle carries rs_line). */}
+            {rsAvailable && (
+              <ToggleButtonGroup size="small">
+                <ToggleButton
+                  value="rs"
+                  selected={showRSLine}
+                  disabled={effectiveTimeframe !== 'daily'}
+                  onClick={() => setShowRSLine((prev) => !prev)}
+                  title="RS line (stock vs. benchmark) with blue-dot leadership signals"
+                >
+                  RS
+                </ToggleButton>
+              </ToggleButtonGroup>
+            )}
+          </Box>
         </Box>
       )}
 

@@ -103,6 +103,22 @@ class PriceHistoryBatchResponse(BaseModel):
     missing: List[str]
 
 
+class RSLinePoint(BaseModel):
+    """A single point on the RS line (stock / benchmark ratio)."""
+
+    time: str
+    value: float
+
+
+class RSLineResponse(BaseModel):
+    """RS line series + 'blue dot' dates (RS new high before price) for chart overlay."""
+
+    symbol: str
+    benchmark_symbol: str
+    rs_line: List[RSLinePoint]
+    blue_dots: List[str]
+
+
 class StockChartSnapshot(BaseModel):
     """Chart payload for the decision workspace."""
 

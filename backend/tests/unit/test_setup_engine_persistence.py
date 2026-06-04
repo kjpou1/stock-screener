@@ -71,6 +71,7 @@ _SE_PAYLOAD: dict[str, Any] = {
     "quiet_days_10d": 3,
     "rs": 1.12,
     "rs_line_new_high": True,
+    "rs_line_blue_dot": True,
     "rs_vs_spy_65d": 8.5,
     "rs_vs_spy_trend_20d": 0.03,
     "stage": 2,

@@ -18,6 +18,19 @@ export const fetchPriceHistory = async (symbol, period = '6mo') => {
 };
 
 /**
+ * Fetch the RS line (stock / market benchmark) and blue-dot dates for a symbol.
+ * @param {string} symbol - Stock symbol
+ * @param {string} period - Time period (default: '6mo')
+ * @returns {Promise<{symbol: string, benchmark_symbol: string, rs_line: Array<{time: string, value: number}>, blue_dots: string[]}>}
+ */
+export const fetchRSLine = async (symbol, period = '6mo') => {
+  const response = await apiClient.get(`/v1/stocks/${symbol}/rs-line`, {
+    params: { period },
+  });
+  return response.data;
+};
+
+/**
  * Fetch OHLCV history for many symbols in a single request.
  * @param {string[]} symbols - Ticker symbols (case-insensitive, deduped server-side)
  * @param {string} period - Time period (default: '6mo')
@@ -35,6 +48,7 @@ export const fetchPriceHistoryBatch = async (symbols, period = '6mo') => {
 export const priceHistoryKeys = {
   all: ['priceHistory'],
   symbol: (symbol, period = '6mo') => ['priceHistory', symbol, period],
+  rsLine: (symbol, period = '6mo') => ['priceHistory', 'rsLine', symbol, period],
   batch: (symbols, period = '6mo') => [
     'priceHistory',
     'batch',

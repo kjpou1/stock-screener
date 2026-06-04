@@ -71,6 +71,8 @@ def test_compute_breakout_readiness_features_matches_formula_spec():
     assert computed.volume_vs_50d == pytest.approx(float(volume_vs_50d_series.iloc[-1]))
     assert computed.rs == pytest.approx(float(rs_series.iloc[-1]))
     assert computed.rs_line_new_high is True
+    # Price rises monotonically here, so it is also at a new high -> not a blue dot.
+    assert computed.rs_line_blue_dot is False
     assert computed.rs_vs_spy_65d == pytest.approx(float(rs_vs_spy_65d_series.iloc[-1]))
     assert computed.rs_vs_spy_trend_20d == pytest.approx(
         float(rolling_slope(rs_series, window=20).iloc[-1])
@@ -87,6 +89,39 @@ def test_compute_breakout_readiness_features_matches_formula_spec():
     assert 0 <= computed.quiet_days_10d <= 10
 
 
+def test_compute_breakout_readiness_blue_dot_when_rs_leads_price():
+    periods = 300
+    idx = pd.bdate_range("2025-01-02", periods=periods)
+    # Price climbs, then pulls back over the final 15 bars (no new price high).
+    close = np.concatenate(
+        [np.linspace(100.0, 200.0, periods - 15), np.linspace(200.0, 190.0, 15)]
+    )
+    # Benchmark climbs, then falls harder over the final 15 bars, so the RS line
+    # (close / benchmark) makes a new high at the last bar even though price did not.
+    benchmark = np.concatenate(
+        [np.linspace(50.0, 100.0, periods - 15), np.linspace(100.0, 70.0, 15)]
+    )
+    frame = pd.DataFrame(
+        {
+            "Open": close * 0.995,
+            "High": close * 1.01,
+            "Low": close * 0.99,
+            "Close": close,
+            "Volume": np.linspace(1_000_000.0, 1_500_000.0, periods),
+        },
+        index=idx,
+    )
+
+    computed = compute_breakout_readiness_features(
+        frame,
+        pivot_price=190.0,
+        benchmark_close=pd.Series(benchmark, index=idx),
+    )
+
+    assert computed.rs_line_new_high is True
+    assert computed.rs_line_blue_dot is True
+
+
 def test_compute_breakout_readiness_features_without_benchmark_rs_fields_are_null():
     computed = compute_breakout_readiness_features(
         _price_frame(),
@@ -96,6 +131,7 @@ def test_compute_breakout_readiness_features_without_benchmark_rs_fields_are_nul
 
     assert computed.rs is None
     assert computed.rs_line_new_high is False
+    assert computed.rs_line_blue_dot is False
     assert computed.rs_vs_spy_65d is None
     assert computed.rs_vs_spy_trend_20d is None
 
@@ -135,6 +171,7 @@ def test_readiness_features_to_payload_fields_exports_expected_keys():
         "quiet_days_10d",
         "rs",
         "rs_line_new_high",
+        "rs_line_blue_dot",
         "rs_vs_spy_65d",
         "rs_vs_spy_trend_20d",
     }

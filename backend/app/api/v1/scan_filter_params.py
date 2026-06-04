@@ -112,6 +112,7 @@ def parse_scan_filters(
     max_se_quiet_days_10d: Optional[float] = Query(None, description="Maximum SE quiet days count (10d)"),
     se_setup_ready: Optional[bool] = Query(None, description="SE setup ready filter"),
     se_rs_line_new_high: Optional[bool] = Query(None, description="SE RS line new high filter"),
+    se_rs_line_blue_dot: Optional[bool] = Query(None, description="SE RS line blue dot filter (RS new high before price)"),
     se_in_early_zone: Optional[bool] = Query(None, description="SE in early zone filter"),
     se_extended_from_pivot: Optional[bool] = Query(None, description="SE extended from pivot filter"),
     se_bb_squeeze: Optional[bool] = Query(None, description="SE BB squeeze filter"),
@@ -307,6 +308,8 @@ def parse_scan_filters(
         f.add_boolean("se_setup_ready", se_setup_ready)
     if se_rs_line_new_high is not None:
         f.add_boolean("se_rs_line_new_high", se_rs_line_new_high)
+    if se_rs_line_blue_dot is not None:
+        f.add_boolean("se_rs_line_blue_dot", se_rs_line_blue_dot)
     if se_in_early_zone is not None:
         f.add_boolean("se_in_early_zone", se_in_early_zone)
     if se_extended_from_pivot is not None:

@@ -828,6 +828,7 @@ def _map_feature_to_scan_result(
     extended["se_up_down_volume_ratio_10d"] = _se.get("up_down_volume_ratio_10d")
     extended["se_quiet_days_10d"] = _se.get("quiet_days_10d")
     extended["se_rs_line_new_high"] = _se.get("rs_line_new_high")
+    extended["se_rs_line_blue_dot"] = _se.get("rs_line_blue_dot")
     extended["se_pivot_price"] = _se.get("pivot_price")
     extended["se_setup_ready"] = _se.get("setup_ready")
     extended["se_quality_score"] = _se.get("quality_score")

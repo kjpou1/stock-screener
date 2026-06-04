@@ -733,7 +733,9 @@ def test_resolve_symbol_market_ignores_inactive_universe_rows(session):
     )
     session.commit()
 
-    assert stocks_module._resolve_symbol_market(session, "0700.HK") is None
+    from app.api.v1._price_history import resolve_symbol_market
+
+    assert resolve_symbol_market(session, "0700.HK") is None
 
 
 @pytest.mark.asyncio

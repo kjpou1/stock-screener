@@ -324,6 +324,23 @@ def rolling_percentile_rank(series: pd.Series, *, window: int) -> pd.Series:
     return pd.Series(out, index=series.index, name=series.name)
 
 
+_NEW_HIGH_EPS = 1e-12
+
+
+def at_new_high(series: pd.Series, *, window: int) -> bool:
+    """True when the last valid value is at its trailing-``window`` maximum."""
+    tail = series.dropna().tail(window)
+    if tail.empty:
+        return False
+    return bool(tail.iloc[-1] >= tail.max() - _NEW_HIGH_EPS)
+
+
+def rolling_at_new_high(series: pd.Series, *, window: int) -> pd.Series:
+    """Per-element boolean: each value is at its trailing-``window`` running max."""
+    roll_max = series.rolling(window=window, min_periods=1).max()
+    return series >= (roll_max - _NEW_HIGH_EPS)
+
+
 def detect_swings(
     highs: pd.Series,
     lows: pd.Series,

@@ -851,6 +851,7 @@ def _map_row_to_domain(
     extended["se_up_down_volume_ratio_10d"] = se_data.get("up_down_volume_ratio_10d")
     extended["se_quiet_days_10d"] = se_data.get("quiet_days_10d")
     extended["se_rs_line_new_high"] = se_data.get("rs_line_new_high")
+    extended["se_rs_line_blue_dot"] = se_data.get("rs_line_blue_dot")
     extended["se_pivot_price"] = se_data.get("pivot_price")
     extended["se_setup_ready"] = se_data.get("setup_ready")
 

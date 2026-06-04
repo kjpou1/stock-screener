@@ -140,6 +140,7 @@ _JSON_FIELD_MAP: dict[str, tuple[str, ...]] = {
     # Setup Engine (boolean)
     "se_setup_ready": ("setup_engine", "setup_ready"),
     "se_rs_line_new_high": ("setup_engine", "rs_line_new_high"),
+    "se_rs_line_blue_dot": ("setup_engine", "rs_line_blue_dot"),
     "se_in_early_zone": ("setup_engine", "in_early_zone"),
     "se_extended_from_pivot": ("setup_engine", "extended_from_pivot"),
     "se_bb_squeeze": ("setup_engine", "bb_squeeze"),

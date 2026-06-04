@@ -17,6 +17,7 @@ from urllib.parse import quote
 import pandas as pd
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.analysis.patterns.rs_line import blue_dot_series, compute_rs_line
 from app.domain.common.query import FilterSpec, SortOrder, SortSpec
 from app.domain.markets.catalog import get_market_catalog
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
@@ -752,10 +753,73 @@ class StaticSiteExportService:
         chart_dir = output_dir / normalized_prefix / "charts"
         chart_dir.mkdir(parents=True, exist_ok=True)
 
+        # Market benchmark (fetched once) drives the per-symbol RS line + blue dots.
+        market = self._run_market(run) or STATIC_DEFAULT_MARKET
+        benchmark_symbol, benchmark_df = self._get_market_benchmark_history(market, period="2y")
+
         entries: list[dict[str, Any]] = []
         skipped_symbols: list[str] = []
         row_by_symbol: dict[str, Any] = {}
         ordered_rows = list(rows)
+
+        def _emit_chart(symbol, *, rank, stock_data, price_df, fundamentals_value) -> None:
+            """Serialize + write one chart payload, recording it in ``entries`` (or skip)."""
+            bars = self._serialize_chart_bars(price_df)
+            if not bars:
+                skipped_symbols.append(symbol)
+                return
+            rs_line, blue_dots = self._serialize_rs_line(price_df, benchmark_df)
+            rel_path = self._chart_payload_path(symbol, path_prefix=normalized_prefix)
+            self._write_json(
+                output_dir / rel_path,
+                {
+                    "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
+                    "generated_at": generated_at,
+                    "as_of_date": run.as_of_date.isoformat(),
+                    "symbol": symbol,
+                    "rank": rank,
+                    "period": STATIC_CHART_PERIOD,
+                    "bars": bars,
+                    "rs_line": rs_line,
+                    "blue_dots": blue_dots,
+                    "benchmark_symbol": benchmark_symbol,
+                    "stock_data": stock_data,
+                    "fundamentals": fundamentals_value,
+                },
+            )
+            entries.append({"symbol": symbol, "rank": rank, "path": rel_path.as_posix()})
+
+        def _expand_extra_charts(candidate_symbols, *, log_label) -> None:
+            """Emit charts for symbols not already exported (preset/group expansion)."""
+            extra = sorted(candidate_symbols - {e["symbol"] for e in entries} - set(skipped_symbols))
+            if not extra:
+                return
+            before = len(entries)
+            ser_by_symbol = {r["symbol"]: r for r in (serialized_rows or []) if r.get("symbol")}
+            for row in ordered_rows:
+                sym = getattr(row, "symbol", None)
+                if sym and sym not in row_by_symbol:
+                    row_by_symbol[sym] = row
+            for offset in range(0, len(extra), STATIC_CHART_LOOKUP_BATCH_SIZE):
+                batch = extra[offset:offset + STATIC_CHART_LOOKUP_BATCH_SIZE]
+                price_data = self._price_cache.get_many_cached_only(batch, period="2y")
+                fundamentals = self._fundamentals_cache.get_many_cached_only(batch)
+                for symbol in batch:
+                    domain_row = row_by_symbol.get(symbol)
+                    stock_data = self._serialize_scan_row(domain_row) if domain_row else ser_by_symbol.get(symbol)
+                    _emit_chart(
+                        symbol,
+                        rank=None,
+                        stock_data=stock_data,
+                        price_df=price_data.get(symbol),
+                        fundamentals_value=fundamentals.get(symbol),
+                    )
+            logger.info(
+                "%s added %d charts (%d extra symbols attempted)",
+                log_label,
+                len(entries) - before,
+                len(extra),
+            )
 
         if serialized_rows is not None:
             raw_rows_by_symbol = {
@@ -795,89 +859,20 @@ class StaticSiteExportService:
                     continue
 
                 row_by_symbol[symbol] = row
-                bars = self._serialize_chart_bars(price_data.get(symbol))
-                if not bars:
-                    skipped_symbols.append(symbol)
-                    continue
-
-                rel_path = self._chart_payload_path(symbol, path_prefix=normalized_prefix)
-                payload = {
-                    "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
-                    "generated_at": generated_at,
-                    "as_of_date": run.as_of_date.isoformat(),
-                    "symbol": symbol,
-                    "rank": rank,
-                    "period": STATIC_CHART_PERIOD,
-                    "bars": bars,
-                    "stock_data": self._serialize_scan_row(row),
-                    "fundamentals": fundamentals.get(symbol),
-                }
-                self._write_json(output_dir / rel_path, payload)
-                entries.append(
-                    {
-                        "symbol": symbol,
-                        "rank": rank,
-                        "path": rel_path.as_posix(),
-                    }
+                _emit_chart(
+                    symbol,
+                    rank=rank,
+                    stock_data=self._serialize_scan_row(row),
+                    price_df=price_data.get(symbol),
+                    fundamentals_value=fundamentals.get(symbol),
                 )
 
         # --- Pass 2: expand preset screen top-N charts ---
         if serialized_rows is not None:
-            preset_symbols = get_preset_chart_symbols(
-                serialized_rows, PRESET_SCREENS, STATIC_CHART_PRESET_TOP_N,
+            _expand_extra_charts(
+                get_preset_chart_symbols(serialized_rows, PRESET_SCREENS, STATIC_CHART_PRESET_TOP_N),
+                log_label="Preset screen expansion",
             )
-            exported_symbols = {e["symbol"] for e in entries}
-            extra_symbols = sorted(preset_symbols - exported_symbols - set(skipped_symbols))
-            entries_before_pass_2 = len(entries)
-
-            if extra_symbols:
-                # Build a lookup from serialized rows for extra symbols
-                ser_by_symbol = {r["symbol"]: r for r in serialized_rows if r.get("symbol")}
-                # Also need domain rows for _serialize_scan_row
-                for row in ordered_rows:
-                    sym = getattr(row, "symbol", None)
-                    if sym and sym not in row_by_symbol:
-                        row_by_symbol[sym] = row
-
-                for batch_start in range(0, len(extra_symbols), STATIC_CHART_LOOKUP_BATCH_SIZE):
-                    batch = extra_symbols[batch_start:batch_start + STATIC_CHART_LOOKUP_BATCH_SIZE]
-                    price_data = self._price_cache.get_many_cached_only(batch, period="2y")
-                    fundamentals = self._fundamentals_cache.get_many_cached_only(batch)
-
-                    for symbol in batch:
-                        bars = self._serialize_chart_bars(price_data.get(symbol))
-                        if not bars:
-                            skipped_symbols.append(symbol)
-                            continue
-
-                        rel_path = self._chart_payload_path(symbol, path_prefix=normalized_prefix)
-                        domain_row = row_by_symbol.get(symbol)
-                        stock_data = self._serialize_scan_row(domain_row) if domain_row else ser_by_symbol.get(symbol)
-                        payload = {
-                            "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
-                            "generated_at": generated_at,
-                            "as_of_date": run.as_of_date.isoformat(),
-                            "symbol": symbol,
-                            "rank": None,
-                            "period": STATIC_CHART_PERIOD,
-                            "bars": bars,
-                            "stock_data": stock_data,
-                            "fundamentals": fundamentals.get(symbol),
-                        }
-                        self._write_json(output_dir / rel_path, payload)
-                        entries.append(
-                            {
-                                "symbol": symbol,
-                                "rank": None,
-                                "path": rel_path.as_posix(),
-                            }
-                        )
-
-                logger.info(
-                    "Preset screen expansion added %d charts (%d extra symbols attempted)",
-                    len(entries) - entries_before_pass_2,
-                    len(extra_symbols),
-                )
 
         # --- Pass 3: expand coverage to all constituents of top-N groups ---
         group_symbols = self._collect_top_group_constituent_symbols(
@@ -885,67 +880,10 @@ class StaticSiteExportService:
             top_n=STATIC_CHART_TOP_N_GROUPS,
         )
         if group_symbols:
-            exported_symbols = {e["symbol"] for e in entries}
-            extra_group_symbols = sorted(
-                group_symbols - exported_symbols - set(skipped_symbols)
+            _expand_extra_charts(
+                group_symbols,
+                log_label=f"Top-{STATIC_CHART_TOP_N_GROUPS} groups expansion",
             )
-            entries_before_pass_3 = len(entries)
-
-            if extra_group_symbols:
-                ser_by_symbol = (
-                    {r["symbol"]: r for r in serialized_rows if r.get("symbol")}
-                    if serialized_rows is not None
-                    else {}
-                )
-                for row in ordered_rows:
-                    sym = getattr(row, "symbol", None)
-                    if sym and sym not in row_by_symbol:
-                        row_by_symbol[sym] = row
-
-                for batch_start in range(0, len(extra_group_symbols), STATIC_CHART_LOOKUP_BATCH_SIZE):
-                    batch = extra_group_symbols[batch_start:batch_start + STATIC_CHART_LOOKUP_BATCH_SIZE]
-                    price_data = self._price_cache.get_many_cached_only(batch, period="2y")
-                    fundamentals = self._fundamentals_cache.get_many_cached_only(batch)
-
-                    for symbol in batch:
-                        bars = self._serialize_chart_bars(price_data.get(symbol))
-                        if not bars:
-                            skipped_symbols.append(symbol)
-                            continue
-
-                        rel_path = self._chart_payload_path(symbol, path_prefix=normalized_prefix)
-                        domain_row = row_by_symbol.get(symbol)
-                        stock_data = (
-                            self._serialize_scan_row(domain_row)
-                            if domain_row
-                            else ser_by_symbol.get(symbol)
-                        )
-                        payload = {
-                            "schema_version": CHART_BUNDLE_SCHEMA_VERSION,
-                            "generated_at": generated_at,
-                            "as_of_date": run.as_of_date.isoformat(),
-                            "symbol": symbol,
-                            "rank": None,
-                            "period": STATIC_CHART_PERIOD,
-                            "bars": bars,
-                            "stock_data": stock_data,
-                            "fundamentals": fundamentals.get(symbol),
-                        }
-                        self._write_json(output_dir / rel_path, payload)
-                        entries.append(
-                            {
-                                "symbol": symbol,
-                                "rank": None,
-                                "path": rel_path.as_posix(),
-                            }
-                        )
-
-                logger.info(
-                    "Top-%d groups expansion added %d charts (%d extra symbols attempted)",
-                    STATIC_CHART_TOP_N_GROUPS,
-                    len(entries) - entries_before_pass_3,
-                    len(extra_group_symbols),
-                )
 
         index_rel_path = normalized_prefix / "charts" / "index.json"
         index_payload = {
@@ -2017,16 +1955,56 @@ class StaticSiteExportService:
             ),
         )
 
+    @staticmethod
+    def _static_chart_cutoff(index) -> datetime:
+        """The display-window cutoff (``STATIC_CHART_PERIOD_DAYS``), converted to ``index``'s tz.
+
+        Computed in UTC and tz-converted (not ``replace(tzinfo=...)``, which would
+        reinterpret the UTC wall time as local and shift the boundary day).
+        """
+        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=STATIC_CHART_PERIOD_DAYS)
+        index_tz = getattr(index, "tz", None)
+        if index_tz is not None:
+            return cutoff.tz_convert(index_tz).to_pydatetime()
+        return cutoff.tz_localize(None).to_pydatetime()
+
+    def _serialize_rs_line(
+        self, stock_data, benchmark_df
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """RS line series + blue-dot dates for a symbol, trimmed to the bar window.
+
+        New-high detection runs over the full cached history (the 252-day lookback
+        needs more than the displayed window), then output is trimmed to the same
+        ``STATIC_CHART_PERIOD_DAYS`` window as the candles so the overlay aligns.
+        """
+        if (
+            stock_data is None
+            or getattr(stock_data, "empty", True)
+            or benchmark_df is None
+            or benchmark_df.empty
+            or "Close" not in benchmark_df.columns
+        ):
+            return [], []
+
+        rs_line_full = compute_rs_line(stock_data["Close"], benchmark_df["Close"], normalize=True)
+        blue_full = blue_dot_series(stock_data["Close"], benchmark_df["Close"])
+
+        cutoff = self._static_chart_cutoff(rs_line_full.index)
+        rs_window = rs_line_full[rs_line_full.index >= cutoff].dropna()
+        blue_window = blue_full[(blue_full.index >= cutoff) & blue_full]
+
+        rs_line = [
+            {"time": ts.strftime("%Y-%m-%d"), "value": round(float(v), 4)}
+            for ts, v in rs_window.items()
+        ]
+        blue_dots = [ts.strftime("%Y-%m-%d") for ts in blue_window.index]
+        return rs_line, blue_dots
+
     def _serialize_chart_bars(self, data) -> list[dict[str, Any]]:
         if data is None or getattr(data, "empty", True):
             return []
 
-        cutoff_date = datetime.utcnow() - timedelta(days=STATIC_CHART_PERIOD_DAYS)
-        cutoff_ts = cutoff_date
-        if data.index.tz is not None:
-            cutoff_ts = cutoff_date.replace(tzinfo=data.index.tz)
-
-        filtered = data[data.index >= cutoff_ts]
+        filtered = data[data.index >= self._static_chart_cutoff(data.index)]
         if filtered.empty:
             return []
 

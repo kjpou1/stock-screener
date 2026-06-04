@@ -122,6 +122,7 @@ class SetupEnginePayload(TypedDict):
     quiet_days_10d: int | None
     rs: float | None
     rs_line_new_high: bool
+    rs_line_blue_dot: bool
     rs_vs_spy_65d: float | None
     rs_vs_spy_trend_20d: float | None
 
@@ -514,6 +515,14 @@ SETUP_ENGINE_FIELD_SPECS: tuple[SetupEngineFieldSpec, ...] = (
         description="True when RS line has made a new high for timeframe.",
     ),
     SetupEngineFieldSpec(
+        name="rs_line_blue_dot",
+        type_name="bool",
+        nullable=False,
+        unit=None,
+        source_module="backend/app/scanners/setup_engine_scanner.py",
+        description="True when the RS line makes a new high before price (leadership 'blue dot').",
+    ),
+    SetupEngineFieldSpec(
         name="rs_vs_spy_65d",
         type_name="float",
         nullable=True,
@@ -640,6 +649,9 @@ SETUP_ENGINE_REQUIRED_KEYS: tuple[str, ...] = (
     "quiet_days_10d",
     "rs",
     "rs_line_new_high",
+    # rs_line_blue_dot is intentionally NOT required: it's a new additive field,
+    # so payloads persisted before it existed (and hand-built test fixtures) must
+    # still validate. Producers emit it; it stays in the TypedDict + field specs.
     "rs_vs_spy_65d",
     "rs_vs_spy_trend_20d",
     "stage",

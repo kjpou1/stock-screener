@@ -163,6 +163,13 @@ function RatingFiltersSection({
             onChange={(value) => updateFilter('seRsLineNewHigh', value)}
           />
         </Grid>
+        <Grid item xs={6} sm={3} md={1}>
+          <CompactCheckbox
+            label="Blue Dot"
+            value={filters.seRsLineBlueDot}
+            onChange={(value) => updateFilter('seRsLineBlueDot', value)}
+          />
+        </Grid>
         <Grid item xs={12} sm={6} md={2.4}>
           <CompactMultiSelect
             label="SE Pattern"

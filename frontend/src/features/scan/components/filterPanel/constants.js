@@ -64,6 +64,6 @@ export const RATING_KEYS = [
   'compositeScore', 'minerviniScore', 'canslimScore', 'ipoScore',
   'customScore', 'volBreakthroughScore',
   'seSetupScore', 'seDistanceToPivot', 'seBbSqueeze', 'seVolumeVs50d',
-  'seUpDownVolume', 'sePatternPrimary', 'seSetupReady', 'seRsLineNewHigh',
+  'seUpDownVolume', 'sePatternPrimary', 'seSetupReady', 'seRsLineNewHigh', 'seRsLineBlueDot',
   'vcpScore', 'vcpDetected', 'vcpReady', 'passesTemplate',
 ];

@@ -76,6 +76,7 @@ const columns = [
   { id: 'se_bb_width_pctile_252', label: 'Sqz', sortable: true, width: 45 },
   { id: 'se_volume_vs_50d', label: 'V50', sortable: true, width: 45 },
   { id: 'se_rs_line_new_high', label: 'RSH', sortable: false, width: 35 },
+  { id: 'se_rs_line_blue_dot', label: 'BD', sortable: false, width: 35 },
   { id: 'se_pivot_price', label: 'Pvt$', sortable: true, width: 55 },
   { id: 'rs_rating', label: 'RS', sortable: true, width: 40 },
   { id: 'rs_rating_1m', label: '1M', sortable: true, width: 40 },
@@ -320,6 +321,17 @@ const VirtualTableRow = memo(function VirtualTableRow({
           <CheckIcon sx={{ fontSize: 14, color: 'success.main' }} />
         ) : (
           <CloseIcon sx={{ fontSize: 14, color: 'text.disabled' }} />
+        )}
+      </TableCell>
+
+      <TableCell align="center" sx={{ width: 35, minWidth: 35 }}>
+        {row.se_rs_line_blue_dot ? (
+          <Box
+            sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: '#2196f3', display: 'inline-block' }}
+            title="RS line at new high before price (blue dot)"
+          />
+        ) : (
+          <Box component="span" sx={{ color: 'text.disabled' }}>-</Box>
         )}
       </TableCell>
 

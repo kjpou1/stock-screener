@@ -195,6 +195,7 @@ class SetupEngineReport:
     quiet_days_10d: int | None = None
     rs: float | None = None
     rs_line_new_high: bool = False
+    rs_line_blue_dot: bool = False
     rs_vs_spy_65d: float | None = None
     rs_vs_spy_trend_20d: float | None = None
 
@@ -253,6 +254,7 @@ class SetupEngineReport:
             ),
             "rs": _as_float(self.rs),
             "rs_line_new_high": bool(self.rs_line_new_high),
+            "rs_line_blue_dot": bool(self.rs_line_blue_dot),
             "rs_vs_spy_65d": _as_float(self.rs_vs_spy_65d),
             "rs_vs_spy_trend_20d": _as_float(self.rs_vs_spy_trend_20d),
             "stage": self.stage,

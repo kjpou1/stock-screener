@@ -147,6 +147,7 @@ def _coerce_readiness_features(
         volume_vs_50d=_num_or_none("volume_vs_50d"),
         rs=_num_or_none("rs"),
         rs_line_new_high=bool(value.get("rs_line_new_high", False)),
+        rs_line_blue_dot=bool(value.get("rs_line_blue_dot", False)),
         rs_vs_spy_65d=_num_or_none("rs_vs_spy_65d"),
         rs_vs_spy_trend_20d=_num_or_none("rs_vs_spy_trend_20d"),
         bb_squeeze=bool(value.get("bb_squeeze", False)),
@@ -303,6 +304,7 @@ def build_setup_engine_payload(
     quiet_days_10d: int | float | None = None,
     rs: int | float | None = None,
     rs_line_new_high: bool | None = None,
+    rs_line_blue_dot: bool | None = None,
     rs_vs_spy_65d: int | float | None = None,
     rs_vs_spy_trend_20d: int | float | None = None,
     readiness_features: BreakoutReadinessFeatures | Mapping[str, Any] | None = None,
@@ -426,6 +428,11 @@ def build_setup_engine_payload(
             if rs_line_new_high is not None
             else bool(readiness_values["rs_line_new_high"])
         )
+        rs_line_blue_dot = (
+            rs_line_blue_dot
+            if rs_line_blue_dot is not None
+            else bool(readiness_values["rs_line_blue_dot"])
+        )
         rs_vs_spy_65d = (
             rs_vs_spy_65d
             if rs_vs_spy_65d is not None
@@ -468,6 +475,7 @@ def build_setup_engine_payload(
             rs = None
             candidates = []
             rs_line_new_high = False
+            rs_line_blue_dot = False
             rs_vs_spy_65d = None
             rs_vs_spy_trend_20d = None
             stage = None
@@ -585,6 +593,7 @@ def build_setup_engine_payload(
         "quiet_days_10d": norm_quiet_days_10d,
         "rs": _to_float(rs),
         "rs_line_new_high": bool(rs_line_new_high),
+        "rs_line_blue_dot": bool(rs_line_blue_dot),
         "rs_vs_spy_65d": norm_rs_vs_spy,
         "rs_vs_spy_trend_20d": _to_float(rs_vs_spy_trend_20d),
         "stage": stage,

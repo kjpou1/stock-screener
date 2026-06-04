@@ -23,6 +23,7 @@ export const buildDefaultScanFilters = () => ({
   sePatternPrimary: [],
   seSetupReady: null,
   seRsLineNewHigh: null,
+  seRsLineBlueDot: null,
   rsRating: { min: null, max: null },
   rs1m: { min: null, max: null },
   rs3m: { min: null, max: null },

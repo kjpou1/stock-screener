@@ -32,6 +32,7 @@ def _include(
 _include("app_runtime", protected=False)
 _include("auth", prefix="/auth", tags=["auth"], protected=False)
 _include("stocks", prefix="/stocks", tags=["stocks"])
+_include("stocks_rs_line", prefix="/stocks", tags=["stocks"])
 _include("technical", prefix="/technical", tags=["technical"])
 _include("scans", prefix="/scans", tags=["scans"])
 _include("universe", prefix="/universe", tags=["universe"])
