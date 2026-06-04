@@ -36,6 +36,7 @@
     "up_down_volume_ratio_10d": 0.0,
     "quiet_days_10d": 0,
     "rs": 0.21132075471698114,
+    "rs_line_blue_dot": false,
     "rs_line_new_high": false,
     "rs_vs_spy_65d": -4.568308374330976,
     "rs_vs_spy_trend_20d": -0.0001505275466967132,

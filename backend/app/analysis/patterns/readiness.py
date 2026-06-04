@@ -32,9 +32,11 @@ class BreakoutReadinessFeatures:
     volume_vs_50d: float | None
     rs: float | None
     rs_line_new_high: bool
-    rs_line_blue_dot: bool
     rs_vs_spy_65d: float | None
     rs_vs_spy_trend_20d: float | None
+    # Defaulted so existing constructors that predate the blue-dot signal still
+    # build (consistent with bb_squeeze below); production sets it by keyword.
+    rs_line_blue_dot: bool = False
     bb_squeeze: bool = False
     quiet_days_10d: int | None = None
     up_down_volume_ratio_10d: float | None = None
