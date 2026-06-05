@@ -70,6 +70,9 @@ celerybeat-schedule
 # Playwright MCP
 .playwright-mcp/
 
+# Generated agent runtime state
+.superpowers/brainstorm/**/state/**
+
 # bv (beads viewer) local config and caches
 .bv/
 

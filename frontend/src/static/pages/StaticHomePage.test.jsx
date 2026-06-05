@@ -302,6 +302,7 @@ describe('StaticHomePage', () => {
 
   it('shows top 20 leaders in leading groups after top scan candidates with leader-scoped chart navigation', async () => {
     const leaderRows = Array.from({ length: 21 }, (_, index) => makeLeaderRow(index + 1));
+    // Verifies preset sorting stays exact and does not demote IPO-weighted rows behind lower-scoring full rows.
     leaderRows[1] = makeLeaderRow(2, { scan_mode: 'ipo_weighted' });
     const rejectedRows = [
       makeLeaderRow(31, { symbol: 'WEAKRS', rs_rating: 79 }),

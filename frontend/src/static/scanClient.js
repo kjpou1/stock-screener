@@ -234,7 +234,7 @@ export const sortStaticScanRows = (
     if (comparison !== 0) {
       return comparison * direction;
     }
-    if (prioritizeCompositeScanMode && sortBy === 'composite_score') {
+    if (useCompositeModePriority) {
       const modeComparison = compareValues(
         getScanModeSortPriority(left),
         getScanModeSortPriority(right),

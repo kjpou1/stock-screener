@@ -257,4 +257,13 @@ describe('static scan client', () => {
 
     expect(sorted.map((row) => row.symbol)).toEqual(['FULL70', 'FULL80', 'IPO95', 'NEW1']);
   });
+
+  it('uses symbol tiebreaks for equal ascending composite scores', () => {
+    const sorted = sortStaticScanRows([
+      { symbol: 'ZFULL', scan_mode: 'full', composite_score: 80 },
+      { symbol: 'AIPO', scan_mode: 'ipo_weighted', composite_score: 80 },
+    ], 'composite_score', 'asc');
+
+    expect(sorted.map((row) => row.symbol)).toEqual(['AIPO', 'ZFULL']);
+  });
 });
