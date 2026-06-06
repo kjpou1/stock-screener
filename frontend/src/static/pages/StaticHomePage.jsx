@@ -118,12 +118,12 @@ function StaticHomePage() {
       return EMPTY_RESULTS;
     }
     return sortStaticScanRows(
-      filterStaticScanRows(scanRows, buildFiltersFromPreset(leadingGroupScreen, scanDefaultFilters)),
+      filterStaticScanRows(scanRows, buildFiltersFromPreset(leadingGroupScreen)),
       leadingGroupScreen.sort_by,
       leadingGroupScreen.sort_order,
       { prioritizeCompositeScanMode: false }
     ).slice(0, DEFAULT_TOP_RESULTS);
-  }, [leadingGroupScreen, scanDefaultFilters, scanRows]);
+  }, [leadingGroupScreen, scanRows]);
 
   const chartEntries = useMemo(() => chartIndexQuery.data?.symbols || [], [chartIndexQuery.data]);
   const chartEnabledSymbols = useMemo(() => new Set(chartEntries.map((e) => e.symbol)), [chartEntries]);

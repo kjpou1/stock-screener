@@ -1,8 +1,8 @@
 from app.services.preset_screens import (
     PRESET_SCREENS,
-    _effective_preset_filters,
     _matches_preset_filters,
     get_preset_chart_symbols,
+    resolve_preset_screens_for_defaults,
 )
 
 
@@ -28,7 +28,7 @@ def test_leaders_in_leading_groups_preset_filters_for_v1_contract():
     assert screen["name"] == "Leaders in Leading Groups"
     assert screen["sort_by"] == "composite_score"
     assert screen["sort_order"] == "desc"
-    assert screen["apply_default_filters"] is True
+    assert "apply_default_filters" not in screen
     assert "compositeScore" not in screen["filters"]
     assert "minVolume" not in screen["filters"]
     assert _matches_preset_filters(matching, screen["filters"]) is True
@@ -42,20 +42,28 @@ def test_leaders_in_leading_groups_preset_filters_for_v1_contract():
     ) is False
 
 
-def test_leaders_effective_filters_inherit_market_defaults():
+def test_resolved_leaders_filters_materialize_market_defaults():
     screen = _leaders_screen()
 
-    filters = _effective_preset_filters(screen, {"minVolume": 1_300_000})
+    [resolved_screen] = resolve_preset_screens_for_defaults(
+        [screen],
+        {"minVolume": 1_300_000},
+    )
 
-    assert filters == {
+    assert resolved_screen["filters"] == {
         "minVolume": 1_300_000,
         "ibdGroupRank": {"min": None, "max": 40},
         "rsRating": {"min": 80, "max": None},
     }
+    assert "minVolume" not in screen["filters"]
 
 
-def test_preset_chart_symbols_apply_inherited_market_defaults():
+def test_preset_chart_symbols_use_resolved_market_defaults():
     screen = _leaders_screen()
+    [resolved_screen] = resolve_preset_screens_for_defaults(
+        [screen],
+        {"minVolume": 1_300_000},
+    )
     rows = [
         {
             "symbol": "LIQUID",
@@ -75,9 +83,8 @@ def test_preset_chart_symbols_apply_inherited_market_defaults():
 
     assert get_preset_chart_symbols(
         rows,
-        presets=[screen],
+        presets=[resolved_screen],
         top_n=5,
-        default_filters={"minVolume": 1_300_000},
     ) == {"LIQUID"}
 
 

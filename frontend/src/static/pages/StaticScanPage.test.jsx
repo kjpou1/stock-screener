@@ -371,8 +371,8 @@ describe('StaticScanPage', () => {
                 short_name: 'Leaders',
                 description: 'Strong report-card stocks in top 40 IBD groups',
                 tier: 2,
-                apply_default_filters: true,
                 filters: {
+                  minVolume: 100000000,
                   ibdGroupRank: { min: null, max: 40 },
                   rsRating: { min: 80, max: null },
                 },

@@ -2,18 +2,14 @@ import { useMemo, useState } from 'react';
 import { applyScanFilterDefaults } from '../../features/scan/defaultFilters';
 import { filterStaticScanRows } from '../scanClient';
 
-export function buildFiltersFromPreset(screen, defaultFilters = {}) {
-  return applyScanFilterDefaults({
-    ...(screen.apply_default_filters ? defaultFilters : {}),
-    ...screen.filters,
-  });
+export function buildFiltersFromPreset(screen) {
+  return applyScanFilterDefaults(screen?.filters ?? {});
 }
 
 export function usePresetScreens({
   screens,
   allRows,
   hydrationComplete,
-  defaultFilters = {},
 }) {
   const [activeScreenId, setActiveScreenId] = useState(null);
 
@@ -22,10 +18,10 @@ export function usePresetScreens({
     return Object.fromEntries(
       screens.map((s) => [
         s.id,
-        filterStaticScanRows(allRows, buildFiltersFromPreset(s, defaultFilters)).length,
+        filterStaticScanRows(allRows, buildFiltersFromPreset(s)).length,
       ]),
     );
-  }, [allRows, defaultFilters, hydrationComplete, screens]);
+  }, [allRows, hydrationComplete, screens]);
 
   return { activeScreenId, setActiveScreenId, matchCounts };
 }

@@ -1,13 +1,14 @@
 """Preset stock screen definitions for the static site.
 
 Each preset is a named filter configuration using the frontend's camelCase
-filter key names (matching scanClient.js and defaultFilters.js). Presets are
-embedded in the scan manifest and consumed client-side — no backend scanner
-logic is involved at runtime.
+filter key names (matching scanClient.js and defaultFilters.js). Static export
+materializes market defaults into these definitions before embedding them in
+the scan manifest, so static-site consumers can use screen["filters"] directly.
 """
 
 from __future__ import annotations
 
+import copy
 import heapq
 
 RANGE_FILTER_TO_FIELD: dict[str, str] = {
@@ -215,7 +216,6 @@ PRESET_SCREENS: list[dict] = [
         "short_name": "Leaders",
         "description": "Strong report-card stocks in top 40 IBD industry groups",
         "tier": 2,
-        "apply_default_filters": True,
         "filters": {
             "ibdGroupRank": {"min": None, "max": 40},
             "rsRating": {"min": 80, "max": None},
@@ -453,21 +453,40 @@ PRESET_SCREENS: list[dict] = [
 ]
 
 
+STATIC_PRESET_DEFAULT_FILTER_KEYS: dict[str, tuple[str, ...]] = {
+    "leaders_in_leading_groups": ("minVolume",),
+}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _effective_preset_filters(
-    preset: dict,
+def resolve_preset_screens_for_defaults(
+    presets: list[dict],
     default_filters: dict | None = None,
-) -> dict:
-    """Return preset filters after optional inherited manifest defaults."""
+) -> list[dict]:
+    """Return static preset screens with market defaults materialized.
 
-    filters: dict = {}
-    if preset.get("apply_default_filters"):
-        filters.update(default_filters or {})
-    filters.update(preset.get("filters") or {})
-    return filters
+    Static manifests should be self-contained: consumers should be able to use
+    screen["filters"] directly without knowing which defaults the market uses.
+    """
+
+    defaults = default_filters or {}
+    resolved: list[dict] = []
+    for preset in presets:
+        screen = copy.deepcopy(preset)
+        inherited = {
+            key: defaults[key]
+            for key in STATIC_PRESET_DEFAULT_FILTER_KEYS.get(preset.get("id"), ())
+            if key in defaults
+        }
+        screen["filters"] = {
+            **inherited,
+            **(screen.get("filters") or {}),
+        }
+        resolved.append(screen)
+    return resolved
 
 
 def _matches_preset_filters(row: dict, filters: dict) -> bool:
@@ -527,7 +546,6 @@ def get_preset_chart_symbols(
     serialized_rows: list[dict],
     presets: list[dict] | None = None,
     top_n: int = 200,
-    default_filters: dict | None = None,
 ) -> set[str]:
     """Return the union of top-N symbols per preset screen, used to expand
     static-site chart coverage beyond the composite-score ranking.
@@ -537,7 +555,7 @@ def get_preset_chart_symbols(
 
     symbols: set[str] = set()
     for preset in presets:
-        filters = _effective_preset_filters(preset, default_filters)
+        filters = preset.get("filters") or {}
         matching = [
             row for row in serialized_rows
             if _matches_preset_filters(row, filters)

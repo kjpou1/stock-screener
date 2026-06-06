@@ -33,7 +33,11 @@ from app.schemas.groups import (
 )
 from app.schemas.scanning import FilterOptionsResponse, ScanResultItem
 from app.services.breadth_attribution_service import BreadthAttributionService
-from app.services.preset_screens import PRESET_SCREENS, get_preset_chart_symbols
+from app.services.preset_screens import (
+    PRESET_SCREENS,
+    get_preset_chart_symbols,
+    resolve_preset_screens_for_defaults,
+)
 from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
     get_benchmark_cache,
@@ -391,6 +395,7 @@ class StaticSiteExportService:
             serialized_rows=serialized_rows,
             path_prefix=path_prefix,
             groups_payload=groups_payload,
+            preset_screens=scan_manifest.get("preset_screens"),
         )
         breadth_payload = self._build_optional_section_payload(
             section=f"{market} breadth",
@@ -690,6 +695,10 @@ class StaticSiteExportService:
         self._annotate_percentile_ranks(serialized_rows)
         serialized_rows = self._sort_static_scan_rows(serialized_rows)
         resolved_default_filters = self.resolve_static_default_filters(market)
+        resolved_preset_screens = resolve_preset_screens_for_defaults(
+            PRESET_SCREENS,
+            resolved_default_filters,
+        )
         default_filtered_rows = self._apply_static_default_filters(
             serialized_rows, default_filters=resolved_default_filters
         )
@@ -730,7 +739,7 @@ class StaticSiteExportService:
                 gics_sectors=list(filter_options.gics_sectors),
                 ratings=list(filter_options.ratings),
             ).model_dump(mode="json"),
-            "preset_screens": PRESET_SCREENS,
+            "preset_screens": resolved_preset_screens,
             "chunks": chunk_refs,
             "initial_rows": default_filtered_rows[:50],
             "preview_rows": default_filtered_rows[:10],
@@ -748,6 +757,7 @@ class StaticSiteExportService:
         serialized_rows: list[dict[str, Any]] | None = None,
         path_prefix: Path | None = None,
         groups_payload: dict[str, Any] | None = None,
+        preset_screens: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         normalized_prefix = Path() if path_prefix is None else Path(path_prefix)
         chart_dir = output_dir / normalized_prefix / "charts"
@@ -869,13 +879,11 @@ class StaticSiteExportService:
 
         # --- Pass 2: expand preset screen top-N charts ---
         if serialized_rows is not None:
-            preset_default_filters = self.resolve_static_default_filters(market)
             _expand_extra_charts(
                 get_preset_chart_symbols(
                     serialized_rows,
-                    PRESET_SCREENS,
+                    PRESET_SCREENS if preset_screens is None else preset_screens,
                     STATIC_CHART_PRESET_TOP_N,
-                    default_filters=preset_default_filters,
                 ),
                 log_label="Preset screen expansion",
             )

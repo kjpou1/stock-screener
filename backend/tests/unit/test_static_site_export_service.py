@@ -508,6 +508,12 @@ def test_export_scan_bundle_chunks_large_result_sets(service_and_session_factory
     assert manifest["chunk_size"] == 3
     assert manifest["rows_total"] == 5
     assert manifest["default_filters"] == {"minVolume": 100_000_000}
+    leaders_screen = next(
+        screen for screen in manifest["preset_screens"]
+        if screen["id"] == "leaders_in_leading_groups"
+    )
+    assert "apply_default_filters" not in leaders_screen
+    assert leaders_screen["filters"]["minVolume"] == 100_000_000
     assert manifest["default_filtered_rows_total"] == 3
     assert [row["symbol"] for row in manifest["initial_rows"]] == ["SYM0", "SYM2", "SYM4"]
     assert [row["symbol"] for row in manifest["preview_rows"]] == ["SYM0", "SYM2", "SYM4"]
@@ -639,6 +645,11 @@ def test_export_scan_bundle_uses_sg_threshold_for_sg_market(
         )
 
     assert manifest["default_filters"] == {"minVolume": 1_300_000}
+    leaders_screen = next(
+        screen for screen in manifest["preset_screens"]
+        if screen["id"] == "leaders_in_leading_groups"
+    )
+    assert leaders_screen["filters"]["minVolume"] == 1_300_000
     assert manifest["default_filtered_rows_total"] == 3
     assert [row["symbol"] for row in manifest["initial_rows"]] == ["SG0", "SG1", "SG2"]
 
@@ -700,6 +711,11 @@ def test_export_scan_bundle_unknown_market_disables_volume_filter(
         )
 
     assert manifest["default_filters"] == {"minVolume": None}
+    leaders_screen = next(
+        screen for screen in manifest["preset_screens"]
+        if screen["id"] == "leaders_in_leading_groups"
+    )
+    assert leaders_screen["filters"]["minVolume"] is None
     assert manifest["default_filtered_rows_total"] == manifest["rows_total"] == 2
 
 

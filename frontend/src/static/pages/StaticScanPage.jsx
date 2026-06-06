@@ -182,7 +182,6 @@ function StaticScanPage() {
     screens: presetScreens,
     allRows: hydratedRows,
     hydrationComplete,
-    defaultFilters: manifestDefaultFilterValues,
   });
 
   const handleSelectScreen = useCallback((screenId) => {
@@ -194,14 +193,13 @@ function StaticScanPage() {
     } else {
       const screen = presetScreens?.find((s) => s.id === screenId);
       if (screen) {
-        setFilters(buildFiltersFromPreset(screen, manifestDefaultFilterValues));
+        setFilters(buildFiltersFromPreset(screen));
         setSortBy(screen.sort_by);
         setSortOrder(screen.sort_order);
       }
     }
   }, [
     presetScreens,
-    manifestDefaultFilterValues,
     manifestDefaultFilters,
     manifestDefaultSortBy,
     manifestDefaultSortOrder,

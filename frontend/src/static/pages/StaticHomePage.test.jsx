@@ -64,20 +64,20 @@ const manifest = {
   },
 };
 
-const leadersPresetScreen = {
+const makeLeadersPresetScreen = (minVolume = 100_000_000) => ({
   id: 'leaders_in_leading_groups',
   name: 'Leaders in Leading Groups',
   short_name: 'Leaders',
   description: 'Strong report-card stocks in top 40 IBD groups',
   tier: 2,
-  apply_default_filters: true,
   filters: {
+    minVolume,
     ibdGroupRank: { min: null, max: 40 },
     rsRating: { min: 80, max: null },
   },
   sort_by: 'composite_score',
   sort_order: 'desc',
-};
+});
 
 const makeLeaderRow = (index, overrides = {}) => ({
   symbol: `LEAD${String(index).padStart(2, '0')}`,
@@ -154,7 +154,7 @@ describe('StaticHomePage', () => {
       chunks: [
         { path: 'markets/us/scan/chunks/chunk-0001.json' },
       ],
-      preset_screens: [leadersPresetScreen],
+      preset_screens: [makeLeadersPresetScreen()],
     };
     scanChunkPayload = {
       rows: [
@@ -302,6 +302,7 @@ describe('StaticHomePage', () => {
 
   it('uses the static scan manifest default volume for Daily top candidates', async () => {
     scanManifestPayload.default_filters = { minVolume: 1_300_000 };
+    scanManifestPayload.preset_screens = [makeLeadersPresetScreen(1_300_000)];
     scanManifestPayload.initial_rows = [
       {
         symbol: 'LOCALPASS',
@@ -338,6 +339,7 @@ describe('StaticHomePage', () => {
 
   it('uses market liquidity defaults and composite ranking for leaders in leading groups', async () => {
     scanManifestPayload.default_filters = { minVolume: 1_300_000 };
+    scanManifestPayload.preset_screens = [makeLeadersPresetScreen(1_300_000)];
     scanManifestPayload.initial_rows = [
       makeLeaderRow(1, {
         symbol: 'LOCALLEAD',
@@ -402,7 +404,7 @@ describe('StaticHomePage', () => {
           chunks: [
             { path: 'markets/us/scan/chunks/chunk-0001.json' },
           ],
-          preset_screens: [leadersPresetScreen],
+          preset_screens: [makeLeadersPresetScreen()],
         };
       }
 
