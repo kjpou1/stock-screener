@@ -1,6 +1,6 @@
 import { useRef, useEffect, useLayoutEffect, useState, useMemo } from 'react';
-import { createChart, CrosshairMode, CandlestickSeries, LineSeries, HistogramSeries, createSeriesMarkers } from 'lightweight-charts';
 import { Box, CircularProgress, Alert, AlertTitle, Button, ToggleButtonGroup, ToggleButton, useTheme, Typography } from '@mui/material';
+import { createPriceChartSeries } from './createPriceChartSeries';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchPriceHistory, fetchRSLine, priceHistoryKeys, PRICE_HISTORY_STALE_TIME } from '../../api/priceHistory';
 import { rsBandForRange } from './rsBand';
@@ -174,109 +174,29 @@ function CandlestickChart({
     const chartWidth = containerWidth > 0 ? containerWidth : 800;
     const chartHeight = containerHeight > 0 ? containerHeight : height;
 
-    const chart = createChart(chartContainerRef.current, {
+    const {
+      chart,
+      volumeSeries,
+      candlestickSeries,
+      ema10Series,
+      ema20Series,
+      ema50Series,
+      rsLineSeries,
+      rsMarkers,
+    } = createPriceChartSeries(chartContainerRef.current, {
       width: chartWidth,
       height: chartHeight,
-      layout: {
-        background: { type: 'solid', color: isDarkMode ? '#1e1e1e' : '#ffffff' },
-        textColor: isDarkMode ? '#d1d4dc' : '#333333',
-      },
-      grid: {
-        vertLines: { color: isDarkMode ? '#363a45' : '#e0e0e0' },
-        horzLines: { color: isDarkMode ? '#363a45' : '#e0e0e0' },
-      },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-      },
-      rightPriceScale: {
-        borderColor: isDarkMode ? '#485263' : '#cccccc',
-        mode: 1, // Logarithmic scale
-      },
-      timeScale: {
-        borderColor: isDarkMode ? '#485263' : '#cccccc',
-        timeVisible: true,
-        secondsVisible: false,
-      },
-      handleScroll: interactive,
-      handleScale: interactive,
+      isDarkMode,
+      interactive,
     });
-
     chartRef.current = chart;
-
-    // Create volume series (at bottom)
-    const volumeSeries = chart.addSeries(HistogramSeries, {
-      priceFormat: {
-        type: 'volume',
-      },
-      priceScaleId: 'volume',
-    });
-    volumeSeries.priceScale().applyOptions({
-      scaleMargins: {
-        top: 0.7, // Neutral default; reapplied by the RS strip layout effect.
-        bottom: 0,
-      },
-    });
     volumeSeriesRef.current = volumeSeries;
-
-    // Create candlestick series
-    const candlestickSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#2196f3',
-      downColor: '#E619CD',
-      borderVisible: false,
-      wickUpColor: '#2196f3',
-      wickDownColor: '#E619CD',
-      priceScaleId: 'right',
-    });
-    // Price/volume vertical bands are applied reactively below (see the
-    // "RS strip layout" effect) so they can reclaim the RS strip's space when
-    // the RS line is hidden. A neutral default avoids a flash before it runs.
-    candlestickSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.05, bottom: 0.3 },
-    });
     candlestickSeriesRef.current = candlestickSeries;
-
-    // Create EMA 10 line series (Bright Green)
-    const ema10Series = chart.addSeries(LineSeries, {
-      color: '#4CF64D',
-      lineWidth: 2,
-      priceScaleId: 'right',
-    });
     ema10SeriesRef.current = ema10Series;
-
-    // Create EMA 20 line series (Cyan)
-    const ema20Series = chart.addSeries(LineSeries, {
-      color: '#87FBFB',
-      lineWidth: 2,
-      priceScaleId: 'right',
-    });
     ema20SeriesRef.current = ema20Series;
-
-    // Create EMA 50 line series (Green)
-    const ema50Series = chart.addSeries(LineSeries, {
-      color: '#38CD07',
-      lineWidth: 2,
-      priceScaleId: 'right',
-    });
     ema50SeriesRef.current = ema50Series;
-
-    // Create RS line series on its own overlay price scale so the ratio doesn't
-    // distort the price axis. The scale occupies a dedicated band *below* the
-    // candlesticks (between price and volume), so it reads as a separate strip
-    // rather than another moving average; it stays hidden (no axis labels).
-    // Blue-dot markers attach to this series.
-    const rsLineSeries = chart.addSeries(LineSeries, {
-      color: '#FFA726', // orange — distinct from the green/cyan EMAs
-      lineWidth: 2,
-      priceScaleId: 'rs',
-      lastValueVisible: false,
-      priceLineVisible: false,
-    });
-    rsLineSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.66, bottom: 0.22 },
-      visible: false,
-    });
     rsLineSeriesRef.current = rsLineSeries;
-    rsMarkersRef.current = createSeriesMarkers(rsLineSeries, []);
+    rsMarkersRef.current = rsMarkers;
 
     // Subscribe to crosshair move for OHLC legend (skip in compact mode — legend is hidden)
     if (!compact) chart.subscribeCrosshairMove((param) => {
