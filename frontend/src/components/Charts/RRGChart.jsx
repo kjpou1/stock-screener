@@ -17,7 +17,7 @@
  * component is purely presentational. It is shared by the live Group Rankings
  * page and the static-site Groups page — both pass the same `{ groups: [...] }`.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   ScatterChart,
   Scatter,
@@ -33,9 +33,6 @@ import {
   Customized,
 } from 'recharts';
 import {
-  Autocomplete,
-  TextField,
-  Slider,
   Box,
   Card,
   CardContent,
@@ -44,7 +41,9 @@ import {
   Alert,
 } from '@mui/material';
 import { QUADRANT_COLORS, QUADRANT_FILLS, quadrantColor } from './rrgColors';
-import { buildTailPoints, filterGroups } from './rrgTrace';
+import { buildTailPoints } from './rrgTrace';
+import { useRRGFilters } from './useRRGFilters';
+import RRGFilters from './RRGFilters';
 
 // Below this many series shown, the plot renders the full per-week detail:
 // graduated, hoverable tail dots + per-segment direction arrows. Above it (e.g.
@@ -176,28 +175,9 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
   const asOf = data?.date ?? null;
   const scopeLabel = data?.scope === 'sectors' ? 'Sectors' : 'Groups';
 
-  const [selected, setSelected] = useState([]);
-  const [rankRange, setRankRange] = useState(null); // null = full range (inactive)
-  // Clear filters when the dataset identity changes (scope/market switch), since
-  // the option names and rank extent no longer apply.
-  useEffect(() => {
-    setSelected([]);
-    setRankRange(null);
-  }, [data?.scope, data?.market]);
+  const { shown, filter } = useRRGFilters(groups, { scope: data?.scope, market: data?.market });
 
-  const allNames = useMemo(() => groups.map((g) => g.industry_group), [groups]);
-  const maxRank = useMemo(
-    () => groups.reduce((m, g) => (g.rank != null && g.rank > m ? g.rank : m), 1),
-    [groups],
-  );
-  const sliderValue = rankRange ?? [1, maxRank];
-  const rankActive = rankRange != null && (rankRange[0] > 1 || rankRange[1] < maxRank);
-  const shown = useMemo(
-    () => filterGroups(groups, { names: selected, rankRange: rankActive ? rankRange : null }),
-    [groups, selected, rankActive, rankRange],
-  );
-
-  const bound = useMemo(() => computeBound(shown.length ? shown : groups), [shown, groups]);
+  const bound = useMemo(() => computeBound(shown), [shown]);
   const lo = 100 - bound;
   const hi = 100 + bound;
 
@@ -258,39 +238,14 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
             {asOf ? ` · ${asOf}` : ''}
           </Typography>
           <Box sx={{ flexGrow: 1 }} />
-          {maxRank > 1 && (
-            <Box sx={{ width: 200 }}>
-              <Typography variant="caption" color="text.secondary">
-                Rank {sliderValue[0]}–{sliderValue[1]}
-              </Typography>
-              <Slider
-                size="small"
-                min={1}
-                max={maxRank}
-                value={sliderValue}
-                onChange={(_e, v) => setRankRange(v)}
-                valueLabelDisplay="auto"
-                disableSwap
-                sx={{ mt: -0.5 }}
-              />
-            </Box>
-          )}
-          <Autocomplete
-            multiple
-            size="small"
-            options={allNames}
-            value={selected}
-            onChange={(_e, v) => setSelected(v)}
-            limitTags={3}
-            disableCloseOnSelect
-            renderInput={(params) => (
-              <TextField
-                {...params}
-                label={`Filter ${scopeLabel.toLowerCase()}`}
-                placeholder={selected.length ? '' : 'All shown'}
-              />
-            )}
-            sx={{ width: 360, maxWidth: '100%' }}
+          <RRGFilters
+            scopeLabel={scopeLabel}
+            names={filter.names}
+            selected={filter.selected}
+            onSelected={filter.setSelected}
+            maxRank={filter.maxRank}
+            rankValue={filter.rankValue}
+            onRankChange={filter.setRankRange}
           />
         </Box>
 
