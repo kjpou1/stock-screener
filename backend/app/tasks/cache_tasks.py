@@ -28,7 +28,7 @@ from ..services.market_activity_service import (
     mark_market_activity_progress,
     mark_market_activity_started,
 )
-from ..services.price_refresh_planning import plan_price_refresh
+from ..services.price_refresh_planning import LIVE_TOP_UP_MODES, plan_price_refresh
 from ..config import settings
 from ..utils.market_hours import is_market_open, is_trading_day, get_eastern_now, format_market_status
 from ..wiring.bootstrap import (
@@ -1788,15 +1788,20 @@ def smart_refresh_cache(
                 )
             return refresh_symbols
 
+        if mode in LIVE_TOP_UP_MODES and all_symbols and market is not None:
+            github_sync = get_daily_price_bundle_service().sync_from_github(
+                db,
+                market=effective_market,
+                allow_stale=True,
+            )
+
         refresh_plan = plan_price_refresh(
             db,
             all_symbols=all_symbols,
             mode=mode,
-            activity_lifecycle=activity_lifecycle,
             effective_market=effective_market,
-            price_bundle_service=get_daily_price_bundle_service(),
             market_calendar_service=get_market_calendar_service(),
-            github_seed_allowed=bool(all_symbols and market is not None),
+            github_sync=github_sync,
             recently_refreshed_filter=(
                 _symbols_needing_auto_refresh if mode == "auto" else None
             ),

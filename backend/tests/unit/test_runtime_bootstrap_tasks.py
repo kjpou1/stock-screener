@@ -24,6 +24,9 @@ class _FakeTask:
     def si(self, *args, **kwargs):
         return _FakeSignature(self.task, args=args, kwargs=kwargs)
 
+    def s(self, *args, **kwargs):
+        return _FakeSignature(self.task, args=args, kwargs=kwargs)
+
 
 def test_non_us_bootstrap_uses_market_feature_snapshot(monkeypatch):
     from app.domain.bootstrap.plan import build_bootstrap_plan
@@ -186,7 +189,7 @@ def test_bootstrap_universe_name_uses_uppercase_market_code():
     assert module._bootstrap_universe_name("us") == "market:US"
 
 
-def test_queue_local_runtime_bootstrap_runs_market_chains_in_chord(monkeypatch):
+def test_queue_local_runtime_bootstrap_splits_primary_and_background_market_chains(monkeypatch):
     from app.tasks import runtime_bootstrap_tasks as module
 
     class _FakeAsyncResult:
@@ -194,34 +197,49 @@ def test_queue_local_runtime_bootstrap_runs_market_chains_in_chord(monkeypatch):
             self.id = task_id
 
     market_chains = []
-    captured_header = None
-    captured_body = None
+    applied_chains = []
 
     class _FakeChain:
         def __init__(self, *signatures) -> None:
             self.signatures = signatures
             market_chains.append([signature.task for signature in signatures])
 
-    class _FakeGroup:
-        def __init__(self, chains) -> None:
-            self.chains = list(chains)
-
-    class _FakeChord:
-        def __init__(self, header, body) -> None:
-            nonlocal captured_header, captured_body
-            captured_header = header
-            captured_body = body
-
-        def apply_async(self, **_kwargs):
-            return _FakeAsyncResult("secondary-task-123")
+        def apply_async(self, **kwargs):
+            applied_chains.append(
+                {
+                    "tasks": [signature.task for signature in self.signatures],
+                    "errback": kwargs.get("link_error"),
+                }
+            )
+            return _FakeAsyncResult(
+                "primary-task-123" if len(applied_chains) == 1 else f"background-task-{len(applied_chains)}"
+            )
 
     monkeypatch.setattr(
         module,
         "chain",
         lambda *signatures: _FakeChain(*signatures),
     )
-    monkeypatch.setattr(module, "group", lambda chains: _FakeGroup(chains))
-    monkeypatch.setattr(module, "chord", lambda header, body: _FakeChord(header, body))
+    monkeypatch.setattr(
+        module,
+        "complete_local_runtime_bootstrap",
+        _FakeTask("app.tasks.runtime_bootstrap_tasks.complete_local_runtime_bootstrap"),
+    )
+    monkeypatch.setattr(
+        module,
+        "complete_background_market_bootstrap",
+        _FakeTask("app.tasks.runtime_bootstrap_tasks.complete_background_market_bootstrap"),
+    )
+    monkeypatch.setattr(
+        module,
+        "fail_local_runtime_bootstrap",
+        _FakeTask("app.tasks.runtime_bootstrap_tasks.fail_local_runtime_bootstrap"),
+    )
+    monkeypatch.setattr(
+        module,
+        "fail_background_market_bootstrap",
+        _FakeTask("app.tasks.runtime_bootstrap_tasks.fail_background_market_bootstrap"),
+    )
     monkeypatch.setattr(
         module,
         "_build_market_bootstrap_signatures",
@@ -233,15 +251,21 @@ def test_queue_local_runtime_bootstrap_runs_market_chains_in_chord(monkeypatch):
         enabled_markets=["HK", "US", "TW"],
     )
 
-    assert result == "secondary-task-123"
-    assert market_chains == [["task:US"], ["task:HK"], ["task:TW"]]
-    assert captured_header is not None
-    assert len(captured_header.chains) == 3
-    assert captured_body.task == "app.tasks.runtime_bootstrap_tasks.complete_local_runtime_bootstrap"
-    assert captured_body.kwargs == {
+    assert result == "primary-task-123"
+    assert market_chains == [
+        ["task:US", "app.tasks.runtime_bootstrap_tasks.complete_local_runtime_bootstrap"],
+        ["task:HK", "app.tasks.runtime_bootstrap_tasks.complete_background_market_bootstrap"],
+        ["task:TW", "app.tasks.runtime_bootstrap_tasks.complete_background_market_bootstrap"],
+    ]
+    assert applied_chains[0]["errback"].task == "app.tasks.runtime_bootstrap_tasks.fail_local_runtime_bootstrap"
+    assert applied_chains[0]["errback"].kwargs == {
         "primary_market": "US",
-        "enabled_markets": ["US", "HK", "TW"],
+        "enabled_markets": ["US"],
     }
+    assert [call["errback"].task for call in applied_chains[1:]] == [
+        "app.tasks.runtime_bootstrap_tasks.fail_background_market_bootstrap",
+        "app.tasks.runtime_bootstrap_tasks.fail_background_market_bootstrap",
+    ]
 
 
 def test_fail_local_runtime_bootstrap_preserves_active_task_owner(monkeypatch):
@@ -279,7 +303,7 @@ def test_fail_local_runtime_bootstrap_preserves_active_task_owner(monkeypatch):
     ]
 
 
-def test_complete_local_runtime_bootstrap_uses_readiness_service_for_missing_markets(monkeypatch):
+def test_complete_local_runtime_bootstrap_marks_ready_when_only_secondary_markets_are_missing(monkeypatch):
     from app.services.bootstrap_readiness_service import (
         BootstrapReadiness,
         MarketBootstrapReadiness,
@@ -345,11 +369,12 @@ def test_complete_local_runtime_bootstrap_uses_readiness_service_for_missing_mar
     )
 
     assert calls["evaluate"] == (session, ["US", "HK"], "bootstrap-started-at")
-    assert calls["set_bootstrap_state"] == (session, "failed")
+    assert calls["set_bootstrap_state"] == (session, "ready")
     assert result == {
-        "status": "failed",
+        "status": "ready_with_background_failures",
         "primary_market": "US",
         "enabled_markets": ["US", "HK"],
+        "background_failed_markets": ["HK"],
         "reason": "missing published auto scans for: HK",
     }
     assert failed_markets == [
@@ -443,4 +468,72 @@ def test_complete_local_runtime_bootstrap_reports_core_and_scan_readiness_failur
             "task_id": None,
             "message": "Bootstrap scan did not publish",
         },
+    ]
+
+
+def test_complete_background_market_bootstrap_marks_market_failure_without_global_state(monkeypatch):
+    from app.services.bootstrap_readiness_service import (
+        BootstrapReadiness,
+        MarketBootstrapReadiness,
+    )
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    class _FakeSession:
+        def close(self):
+            pass
+
+    class _FakeReadinessService:
+        def evaluate(self, db, *, enabled_markets, bootstrap_started_at=None):
+            calls["evaluate"] = (db, enabled_markets, bootstrap_started_at)
+            return BootstrapReadiness(
+                empty_system=False,
+                market_results={
+                    "HK": MarketBootstrapReadiness(
+                        market="HK",
+                        core_ready=True,
+                        scan_ready=False,
+                    ),
+                },
+            )
+
+    session = _FakeSession()
+    calls = {}
+    failed_markets = []
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: session)
+    monkeypatch.setattr(
+        "app.services.bootstrap_readiness_service.BootstrapReadinessService",
+        _FakeReadinessService,
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.get_runtime_preferences",
+        lambda _db: type("Prefs", (), {"bootstrap_started_at": "started-at"})(),
+    )
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.set_bootstrap_state",
+        lambda *_args, **_kwargs: pytest.fail("background completion must not mutate global bootstrap state"),
+    )
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_failed",
+        lambda _db, **kwargs: failed_markets.append(kwargs),
+    )
+
+    result = module.complete_background_market_bootstrap.run(market="HK")
+
+    assert calls["evaluate"] == (session, ["HK"], "started-at")
+    assert result == {
+        "status": "failed",
+        "market": "HK",
+        "reason": "missing published auto scan",
+    }
+    assert failed_markets == [
+        {
+            "market": "HK",
+            "stage_key": "scan",
+            "lifecycle": "bootstrap",
+            "task_name": "runtime_bootstrap",
+            "task_id": None,
+            "message": "Bootstrap scan did not publish",
+        }
     ]

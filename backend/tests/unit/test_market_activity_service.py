@@ -694,7 +694,7 @@ def test_failed_activity_can_replace_completed_record(db_session, monkeypatch):
     assert hk_market["message"] == "Bootstrap scan did not publish"
 
 
-def test_runtime_activity_status_marks_primary_ready_with_secondary_bootstrap_running(
+def test_runtime_activity_status_reports_active_background_bootstrap_progress_after_primary_ready(
     db_session,
     monkeypatch,
 ):
@@ -716,6 +716,8 @@ def test_runtime_activity_status_marks_primary_ready_with_secondary_bootstrap_ru
         lifecycle="bootstrap",
         task_name="refresh_all_fundamentals",
         task_id="task-hk",
+        current=1200,
+        total=3750,
         message="Refreshing fundamentals",
     )
     monkeypatch.setattr(
@@ -730,14 +732,18 @@ def test_runtime_activity_status_marks_primary_ready_with_secondary_bootstrap_ru
     assert payload["bootstrap"]["state"] == "ready"
     assert payload["bootstrap"]["app_ready"] is True
     assert payload["bootstrap"]["progress_mode"] == "determinate"
-    assert payload["bootstrap"]["percent"] == 100.0
+    assert payload["bootstrap"]["percent"] == 32.0
+    assert payload["bootstrap"]["current"] == 1200
+    assert payload["bootstrap"]["total"] == 3750
+    assert payload["bootstrap"]["current_stage"] == "Fundamentals Refresh"
+    assert payload["bootstrap"]["message"] == "Refreshing fundamentals"
     assert "background" in payload["bootstrap"]["background_warning"].lower()
     assert payload["summary"]["active_market_count"] == 1
     assert payload["summary"]["active_markets"] == ["HK"]
     hk_market = next(item for item in payload["markets"] if item["market"] == "HK")
     assert hk_market["lifecycle"] == "bootstrap"
     assert hk_market["status"] == "running"
-    assert hk_market["progress_mode"] == "indeterminate"
+    assert hk_market["progress_mode"] == "determinate"
 
 
 def test_mark_market_activity_queued_does_not_overwrite_newer_state_for_same_task(

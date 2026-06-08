@@ -28,7 +28,6 @@ const STATUS_COLOR = {
   idle: 'default',
 };
 const ACTIVE_MARKET_STATUSES = new Set(['running', 'queued']);
-const STAGE_LOCAL_PROGRESS_KEYS = new Set(['prices', 'fundamentals', 'scan']);
 
 function formatCount(value) {
   return new Intl.NumberFormat('en-US').format(value);
@@ -42,31 +41,6 @@ function resolveDeterminatePercent(percent, current, total) {
     return Math.max(0, Math.min(100, (Number(current) / Number(total)) * 100));
   }
   return null;
-}
-
-function resolveStageLocalProgress(activity) {
-  if (!activity) {
-    return null;
-  }
-  const stageKey = activity.stage_key || '';
-  if (!STAGE_LOCAL_PROGRESS_KEYS.has(stageKey)) {
-    return null;
-  }
-  const percent = resolveDeterminatePercent(activity.percent, activity.current, activity.total);
-  if (percent === null) {
-    return null;
-  }
-  return {
-    percent,
-    detail: (
-      activity.current !== null
-      && activity.current !== undefined
-      && activity.total !== null
-      && activity.total !== undefined
-    )
-      ? `${formatCount(activity.current)} / ${formatCount(activity.total)} stocks`
-      : null,
-  };
 }
 
 function normalizeEnabled(primaryMarket, enabledMarkets) {
@@ -144,35 +118,35 @@ export default function BootstrapSetupScreen({
     ),
     [marketActivity, primaryActivity]
   );
-  const stageLocalProgress = resolveStageLocalProgress(focusedActivity);
-  const bootstrapProgressMode = (
-    stageLocalProgress ? 'determinate' : (
-      bootstrap?.progress_mode
-      || focusedActivity?.progress_mode
-      || 'indeterminate'
-    )
-  );
   const bootstrapResolvedPercent = resolveDeterminatePercent(
     bootstrap?.percent,
     bootstrap?.current,
     bootstrap?.total,
   );
-  const focusedActivityResolvedPercent = resolveDeterminatePercent(
-    focusedActivity?.percent,
-    focusedActivity?.current,
-    focusedActivity?.total,
+  const requestedBootstrapProgressMode = (
+    bootstrap?.progress_mode
+    || focusedActivity?.progress_mode
+    || 'indeterminate'
+  );
+  const bootstrapProgressMode = (
+    requestedBootstrapProgressMode === 'determinate' && bootstrapResolvedPercent === null
+      ? 'indeterminate'
+      : requestedBootstrapProgressMode
   );
   const bootstrapPercent = (
     bootstrapProgressMode === 'determinate'
-      ? (stageLocalProgress?.percent
-        ?? focusedActivityResolvedPercent
-        ?? bootstrapResolvedPercent
-        ?? 0)
+      ? bootstrapResolvedPercent
       : null
   );
-  const bootstrapMessage = stageLocalProgress
-    ? (focusedActivity?.message || bootstrap?.message || 'Preparing market data.')
-    : (bootstrap?.message || focusedActivity?.message || 'Preparing market data.');
+  const bootstrapProgressDetail = (
+    bootstrap?.current !== null
+    && bootstrap?.current !== undefined
+    && bootstrap?.total !== null
+    && bootstrap?.total !== undefined
+  )
+    ? `${formatCount(bootstrap.current)} / ${formatCount(bootstrap.total)} stocks`
+    : null;
+  const bootstrapMessage = bootstrap?.message || focusedActivity?.message || 'Preparing market data.';
 
   const toggleMarket = (market) => {
     if (market === selectedPrimary) {
@@ -264,9 +238,9 @@ export default function BootstrapSetupScreen({
                       value={bootstrapProgressMode === 'determinate' ? bootstrapPercent : undefined}
                       aria-label="Bootstrap progress"
                     />
-                    {stageLocalProgress?.detail && (
+                    {bootstrapProgressDetail && (
                       <Typography variant="caption" color="text.secondary">
-                        {stageLocalProgress.detail}
+                        {bootstrapProgressDetail}
                       </Typography>
                     )}
                     <Typography variant="body2" color="text.secondary">

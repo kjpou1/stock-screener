@@ -408,9 +408,23 @@ def test_smart_refresh_cache_delta_prefers_github_daily_bundle_and_skips_live_fe
                 "as_of_date": "2026-04-21",
                 "source_revision": "daily_prices_us:20260421120000",
             },
-            symbols_missing_as_of=lambda db, symbols, as_of_date: [],
         ),
     )
+
+    def _plan_price_refresh(db, **kwargs):
+        github_sync = kwargs["github_sync"]
+        assert github_sync["status"] == "success"
+        assert kwargs["mode"] == "delta"
+        return SimpleNamespace(
+            github_sync=github_sync,
+            used_github_seed=True,
+            source="github",
+            symbols=(),
+            jobs=(),
+            completion_message="GitHub daily price bundle is current - no live fetch needed",
+        )
+
+    monkeypatch.setattr(module, "plan_price_refresh", _plan_price_refresh)
     monkeypatch.setattr(
         module,
         "get_market_calendar_service",
@@ -584,7 +598,6 @@ def test_bootstrap_explicit_market_smart_refresh_uses_github_seed(monkeypatch):
         "as_of_date": "2026-03-24",
         "source_revision": "sha-123",
     }
-    github_service.symbols_missing_as_of.return_value = []
     retry_calls = []
 
     monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
@@ -595,6 +608,21 @@ def test_bootstrap_explicit_market_smart_refresh_uses_github_seed(monkeypatch):
     )
     monkeypatch.setattr("app.wiring.bootstrap.get_price_cache", lambda: fake_price_cache)
     monkeypatch.setattr(module, "get_daily_price_bundle_service", lambda: github_service)
+
+    def _plan_price_refresh(db, **kwargs):
+        github_sync = kwargs["github_sync"]
+        assert github_sync["status"] == "success"
+        assert kwargs["mode"] == "bootstrap"
+        return SimpleNamespace(
+            github_sync=github_sync,
+            used_github_seed=True,
+            source="github",
+            symbols=(),
+            jobs=(),
+            completion_message="GitHub daily price bundle is current - no live fetch needed",
+        )
+
+    monkeypatch.setattr(module, "plan_price_refresh", _plan_price_refresh)
     monkeypatch.setattr(module, "mark_market_activity_started", lambda *args, **kwargs: None)
     monkeypatch.setattr(module, "mark_market_activity_completed", lambda *args, **kwargs: None)
     monkeypatch.setattr(
@@ -630,11 +658,6 @@ def test_bootstrap_explicit_market_smart_refresh_uses_github_seed(monkeypatch):
         fake_db,
         market="HK",
         allow_stale=True,
-    )
-    github_service.symbols_missing_as_of.assert_called_once_with(
-        fake_db,
-        symbols=["0700.HK", "0005.HK"],
-        as_of_date="2026-03-24",
     )
     assert retry_calls == []
 

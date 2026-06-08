@@ -23,6 +23,8 @@ describe('BootstrapSetupScreen', () => {
           current_stage: 'Price Refresh',
           progress_mode: 'determinate',
           percent: 25,
+          current: 250,
+          total: 1000,
           message: 'Refreshing prices',
           background_warning: 'Additional data loading continues in the background.',
         },
@@ -62,8 +64,8 @@ describe('BootstrapSetupScreen', () => {
     );
 
     expect(screen.getByText('Price Refresh')).toBeInTheDocument();
-    expect(screen.getByText('42%')).toBeInTheDocument();
-    expect(screen.getByText('420 / 1,000 stocks')).toBeInTheDocument();
+    expect(screen.getByText('25%')).toBeInTheDocument();
+    expect(screen.getByText('250 / 1,000 stocks')).toBeInTheDocument();
     expect(screen.getAllByText(/Refreshing prices/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Additional data loading continues in the background/)).toBeInTheDocument();
     expect(screen.getByText('Enabled market queue')).toBeInTheDocument();
@@ -159,7 +161,7 @@ describe('BootstrapSetupScreen', () => {
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
   });
 
-  it('renders determinate fundamentals progress from the primary market activity row', () => {
+  it('renders determinate fundamentals progress from the bootstrap summary', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
         bootstrap: {
@@ -167,6 +169,8 @@ describe('BootstrapSetupScreen', () => {
           current_stage: 'Fundamentals Refresh',
           progress_mode: 'determinate',
           percent: 40,
+          current: 400,
+          total: 1000,
           message: 'Refreshing fundamentals',
           background_warning: 'Additional data loading continues in the background.',
         },
@@ -198,12 +202,12 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.getByText('75%')).toBeInTheDocument();
-    expect(screen.getByText('750 / 1,000 stocks')).toBeInTheDocument();
+    expect(screen.getByText('40%')).toBeInTheDocument();
+    expect(screen.getByText('400 / 1,000 stocks')).toBeInTheDocument();
     expect(screen.getByText('Fundamentals Refresh')).toBeInTheDocument();
   });
 
-  it('derives stage-local bootstrap percent from counts when percent is absent', () => {
+  it('derives bootstrap summary percent from bootstrap counts when percent is absent', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
         bootstrap: {
@@ -211,6 +215,8 @@ describe('BootstrapSetupScreen', () => {
           current_stage: 'Price Refresh',
           progress_mode: 'determinate',
           percent: null,
+          current: 250,
+          total: 1000,
           message: 'Refreshing prices',
           background_warning: 'Additional data loading continues in the background.',
         },
@@ -242,12 +248,12 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.getByText('55%')).toBeInTheDocument();
-    expect(screen.getByText('550 / 1,000 stocks')).toBeInTheDocument();
+    expect(screen.getByText('25%')).toBeInTheDocument();
+    expect(screen.getByText('250 / 1,000 stocks')).toBeInTheDocument();
     expect(screen.getAllByText(/Batch 2\/4 · refreshing prices/).length).toBeGreaterThan(0);
   });
 
-  it('derives stage-local progress from counts even when progress_mode is stale', () => {
+  it('does not override backend indeterminate progress with market row counts', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
         bootstrap: {
@@ -286,11 +292,11 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.getByText('55%')).toBeInTheDocument();
-    expect(screen.getByText('550 / 1,000 stocks')).toBeInTheDocument();
+    expect(screen.queryByText('55%')).not.toBeInTheDocument();
+    expect(screen.queryByText('550 / 1,000 stocks')).not.toBeInTheDocument();
   });
 
-  it('uses stage_key instead of the display label to unlock primary-market stage progress', () => {
+  it('keeps bootstrap progress independent from market-row stage labels', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
         bootstrap: {
@@ -298,6 +304,8 @@ describe('BootstrapSetupScreen', () => {
           current_stage: 'Refreshing market data',
           progress_mode: 'determinate',
           percent: 30,
+          current: 300,
+          total: 1000,
           message: 'Batch 2/4 · refreshing prices',
           background_warning: 'Additional data loading continues in the background.',
         },
@@ -329,12 +337,12 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.getByText('55%')).toBeInTheDocument();
-    expect(screen.getByText('550 / 1,000 stocks')).toBeInTheDocument();
+    expect(screen.getByText('30%')).toBeInTheDocument();
+    expect(screen.getByText('300 / 1,000 stocks')).toBeInTheDocument();
     expect(screen.getAllByText(/Batch 2\/4 · refreshing prices/).length).toBeGreaterThan(0);
   });
 
-  it('prefers the primary market activity message over the bootstrap summary when stage-local progress is active', () => {
+  it('uses the bootstrap summary message instead of replacing it from market rows', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
         bootstrap: {
@@ -373,8 +381,7 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.getAllByText(/Batch 2\/4 · refreshing prices/).length).toBeGreaterThan(0);
-    expect(screen.queryByText('Preparing bootstrap')).not.toBeInTheDocument();
+    expect(screen.getByText('Preparing bootstrap')).toBeInTheDocument();
   });
 
   it('keeps bootstrap percent sourced from a complete tuple', () => {
@@ -418,8 +425,9 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.getByText('55%')).toBeInTheDocument();
+    expect(screen.queryByText('55%')).not.toBeInTheDocument();
     expect(screen.queryByText('25%')).not.toBeInTheDocument();
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
   });
 
   it('uses the active secondary market for stage-local progress after the primary market completes', () => {
@@ -429,8 +437,10 @@ describe('BootstrapSetupScreen', () => {
           primary_market: 'US',
           current_stage: 'Price Refresh',
           progress_mode: 'determinate',
-          percent: 100,
-          message: 'Primary market is ready while additional market loading continues.',
+          percent: 32,
+          current: 1200,
+          total: 3750,
+          message: 'Refreshing market prices',
           background_warning: 'Additional enabled markets are still loading in the background.',
         },
         markets: [

@@ -203,6 +203,8 @@ class RuntimeActivityBootstrapResponse(BaseModel):
     current_stage: str | None = None
     progress_mode: str = "indeterminate"
     percent: float | None = None
+    current: int | None = None
+    total: int | None = None
     message: str | None = None
     background_warning: str | None = None
 

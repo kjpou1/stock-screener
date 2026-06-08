@@ -621,8 +621,28 @@ def get_runtime_activity_status(db: Session) -> dict[str, Any]:
         for payload in market_payloads
         if payload["market"] != primary_market and payload.get("status") in ACTIVE_STATUSES
     ]
+    secondary_active_payload = next(
+        (
+            payload
+            for payload in market_payloads
+            if payload["market"] != primary_market and payload.get("status") in ACTIVE_STATUSES
+        ),
+        None,
+    )
+    bootstrap_current = None
+    bootstrap_total = None
 
-    if bootstrap_status.bootstrap_state == "ready":
+    if bootstrap_status.bootstrap_state == "ready" and secondary_active_payload:
+        bootstrap_progress_mode = secondary_active_payload.get("progress_mode") or "indeterminate"
+        bootstrap_percent = secondary_active_payload.get("percent")
+        bootstrap_stage = secondary_active_payload.get("stage_label")
+        bootstrap_message = (
+            secondary_active_payload.get("message")
+            or "Additional market loading continues."
+        )
+        bootstrap_current = secondary_active_payload.get("current")
+        bootstrap_total = secondary_active_payload.get("total")
+    elif bootstrap_status.bootstrap_state == "ready":
         bootstrap_progress_mode = "determinate"
         bootstrap_percent = 100.0
         bootstrap_stage = primary_payload.get("stage_label") if primary_payload else None
@@ -671,6 +691,8 @@ def get_runtime_activity_status(db: Session) -> dict[str, Any]:
             "current_stage": bootstrap_stage,
             "progress_mode": bootstrap_progress_mode,
             "percent": bootstrap_percent,
+            "current": bootstrap_current,
+            "total": bootstrap_total,
             "message": bootstrap_message,
             "background_warning": background_warning,
         },
