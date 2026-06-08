@@ -12,10 +12,34 @@ and Custom stock screening with a Feature Store, Hermes-backed assistant, and ma
 
 ### 1. Create Virtual Environment
 
+> **Important:** Create the virtual environment inside the `backend` directory.
+> Several project scripts (including `start_celery.sh`) expect the environment
+> to exist at `backend/venv`.
+>
+> 
 ```bash
+cd backend
+
 python3.11 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Verify interpreter
+which python
+python --version
 ```
+
+Expected output:
+
+```text
+.../stock-screener/backend/venv/bin/python
+Python 3.11.x
+```
+
+> **Common mistake:** Creating the virtual environment in the repository root
+> (`stock-screener/venv`) instead of `stock-screener/backend/venv`. This will
+> cause startup scripts to fail because they reference `./venv/bin/python` and
+> `./venv/bin/celery`.
+
 
 ### 2. Install Dependencies
 
@@ -65,35 +89,35 @@ Interactive docs are disabled by default when server auth is enabled. For truste
 
 ### Health Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/livez` | GET | Liveness probe (zero dependencies) |
-| `/readyz` | GET | Readiness probe (checks DB + Redis) |
-| `/health` | GET | Deprecated alias for `/readyz` |
+| Endpoint  | Method | Description                         |
+| --------- | ------ | ----------------------------------- |
+| `/livez`  | GET    | Liveness probe (zero dependencies)  |
+| `/readyz` | GET    | Readiness probe (checks DB + Redis) |
+| `/health` | GET    | Deprecated alias for `/readyz`      |
 
 ### Endpoint Groups
 
-| Swagger Tag | Route Module | Description |
-|-------------|--------------|-------------|
-| scans | `scans.py` | Scan management, results, and history |
-| stocks | `stocks.py` | Stock data, fundamentals, chart data |
-| features | `features.py` | Feature store management |
-| breadth | `breadth.py` | Market breadth indicators |
-| groups | `groups.py` | IBD group rankings |
-| themes | `themes.py` | Theme discovery and analysis |
-| technical | `technical.py` | Technical indicators |
-| fundamentals | `fundamentals.py` | Fundamental data refresh and stats |
-| assistant | `assistant.py` | Hermes-backed assistant sessions, streaming, and health |
-| user-watchlists | `user_watchlists.py` | Watchlist management |
-| user-themes | `user_themes.py` | User theme management |
-| market-scan | `market_scan.py` | Dashboard market scan lists |
-| filter-presets | `filter_presets.py` | Saved scan filter configurations |
-| universe | `universe.py` | Stock universe management |
-| cache | `cache.py` | Cache management and monitoring |
-| tasks | `tasks.py` | Background task status |
-| config | `config.py` | Admin configuration (LLM, Ollama) |
-| data-fetch | `data_fetch_status.py` | Data fetch lock monitoring |
-| ticker-validation | `ticker_validation.py` | Ticker symbol validation |
+| Swagger Tag       | Route Module           | Description                                             |
+| ----------------- | ---------------------- | ------------------------------------------------------- |
+| scans             | `scans.py`             | Scan management, results, and history                   |
+| stocks            | `stocks.py`            | Stock data, fundamentals, chart data                    |
+| features          | `features.py`          | Feature store management                                |
+| breadth           | `breadth.py`           | Market breadth indicators                               |
+| groups            | `groups.py`            | IBD group rankings                                      |
+| themes            | `themes.py`            | Theme discovery and analysis                            |
+| technical         | `technical.py`         | Technical indicators                                    |
+| fundamentals      | `fundamentals.py`      | Fundamental data refresh and stats                      |
+| assistant         | `assistant.py`         | Hermes-backed assistant sessions, streaming, and health |
+| user-watchlists   | `user_watchlists.py`   | Watchlist management                                    |
+| user-themes       | `user_themes.py`       | User theme management                                   |
+| market-scan       | `market_scan.py`       | Dashboard market scan lists                             |
+| filter-presets    | `filter_presets.py`    | Saved scan filter configurations                        |
+| universe          | `universe.py`          | Stock universe management                               |
+| cache             | `cache.py`             | Cache management and monitoring                         |
+| tasks             | `tasks.py`             | Background task status                                  |
+| config            | `config.py`            | Admin configuration (LLM, Ollama)                       |
+| data-fetch        | `data_fetch_status.py` | Data fetch lock monitoring                              |
+| ticker-validation | `ticker_validation.py` | Ticker symbol validation                                |
 
 All routes are under `/api/v1/`. Exact paths are visible in Swagger only when `SERVER_EXPOSE_API_DOCS=true`.
 
@@ -114,13 +138,13 @@ Dependency injection is wired in `wiring/bootstrap.py`.
 
 ### Scanners
 
-| Screener | File | Criteria |
-|----------|------|----------|
-| Minervini Template | `minervini_scanner.py` | RS > 70-80, Stage 2 uptrend, MA alignment, price 30%+ above 52w low |
-| CANSLIM | `canslim_scanner.py` | Quarterly EPS > 25%, annual EPS growth > 25% 3yr, volume patterns, RS > 70 |
-| IPO | `ipo_scanner.py` | Recent IPOs with momentum characteristics |
-| Volume Breakthrough | `volume_breakthrough_scanner.py` | Unusual volume with confirming price action |
-| Custom | `custom_scanner.py` | 80+ configurable filters with saved presets |
+| Screener            | File                             | Criteria                                                                   |
+| ------------------- | -------------------------------- | -------------------------------------------------------------------------- |
+| Minervini Template  | `minervini_scanner.py`           | RS > 70-80, Stage 2 uptrend, MA alignment, price 30%+ above 52w low        |
+| CANSLIM             | `canslim_scanner.py`             | Quarterly EPS > 25%, annual EPS growth > 25% 3yr, volume patterns, RS > 70 |
+| IPO                 | `ipo_scanner.py`                 | Recent IPOs with momentum characteristics                                  |
+| Volume Breakthrough | `volume_breakthrough_scanner.py` | Unusual volume with confirming price action                                |
+| Custom              | `custom_scanner.py`              | 80+ configurable filters with saved presets                                |
 
 All screeners extend `BaseStockScreener` and register via `@register_screener` in `screener_registry.py`. The `ScanOrchestrator` in `scan_orchestrator.py` coordinates execution. `DataPreparationLayer` (`data_preparation.py`) fetches price/fundamental data once and distributes it to all active screeners.
 
@@ -130,12 +154,12 @@ Pre-computed daily stock snapshots. A scheduled feature run scores every stock i
 
 Lifecycle: **RUNNING** → **COMPLETED** → quality checks → **PUBLISHED** (or **QUARANTINED**)
 
-| Table | Purpose |
-|-------|---------|
-| `feature_runs` | Run metadata (status, timing, universe) |
-| `feature_run_universe_symbols` | Symbols included in each run |
-| `stock_feature_daily` | Per-stock computed features (scores, technicals, fundamentals) |
-| `feature_run_pointers` | Atomic publish mechanism (pointer to latest valid run) |
+| Table                          | Purpose                                                        |
+| ------------------------------ | -------------------------------------------------------------- |
+| `feature_runs`                 | Run metadata (status, timing, universe)                        |
+| `feature_run_universe_symbols` | Symbols included in each run                                   |
+| `stock_feature_daily`          | Per-stock computed features (scores, technicals, fundamentals) |
+| `feature_run_pointers`         | Atomic publish mechanism (pointer to latest valid run)         |
 
 Key files: `domain/feature_store/ports.py`, `domain/feature_store/models.py`, `infra/db/repositories/feature_store_repo.py`
 
@@ -146,25 +170,25 @@ Two Celery queues prevent API rate limit violations:
 - **`celery`** queue: General compute tasks
 - **`data_fetch`** queue: External API calls and content ingestion, kept conservatively serialized in Docker to avoid duplicate ingestion work and external rate-limit pressure
 
-| Task File | Description |
-|-----------|-------------|
-| `scan_tasks.py` | Scan orchestration and result persistence |
-| `cache_tasks.py` | Redis cache warming and refresh |
-| `breadth_tasks.py` | Market breadth calculation |
-| `group_rank_tasks.py` | IBD group rank updates |
-| `fundamentals_tasks.py` | Fundamental data fetching |
-| `theme_discovery_tasks.py` | Theme clustering and extraction |
-| `universe_tasks.py` | Stock universe updates |
+| Task File                  | Description                               |
+| -------------------------- | ----------------------------------------- |
+| `scan_tasks.py`            | Scan orchestration and result persistence |
+| `cache_tasks.py`           | Redis cache warming and refresh           |
+| `breadth_tasks.py`         | Market breadth calculation                |
+| `group_rank_tasks.py`      | IBD group rank updates                    |
+| `fundamentals_tasks.py`    | Fundamental data fetching                 |
+| `theme_discovery_tasks.py` | Theme clustering and extraction           |
+| `universe_tasks.py`        | Stock universe updates                    |
 
 ### Caching
 
 Three Redis databases:
 
-| DB | Purpose | TTL |
-|----|---------|-----|
-| 0 | Celery broker | — |
-| 1 | Celery results | 24h, auto-cleanup |
-| 2 | Application cache | 7d (prices), 7d (fundamentals), 24h (SPY benchmark) |
+| DB  | Purpose           | TTL                                                 |
+| --- | ----------------- | --------------------------------------------------- |
+| 0   | Celery broker     | —                                                   |
+| 1   | Celery results    | 24h, auto-cleanup                                   |
+| 2   | Application cache | 7d (prices), 7d (fundamentals), 24h (SPY benchmark) |
 
 SPY benchmark refresh uses distributed locking to prevent thundering herd on cache expiry. Connection pool managed in `services/redis_pool.py`.
 
@@ -258,14 +282,14 @@ pytest tests/unit/test_minervini_scanner.py -v # Specific file
 
 Diagnostic utilities in `scripts/`:
 
-| Script | Description |
-|--------|-------------|
-| `inspect_redis.py` | Inspect Redis cache keys |
-| `cache_diagnostic.py` | Trace cache flow (DB → Redis) |
-| `check_cache_status.py` | Check price cache status |
-| `clear_redis_price_cache.py` | Clear Redis cache after config change |
-| `force_full_cache_refresh.py` | Force full cache refresh |
-| `cleanup_orphaned_scans.py` | Synchronously delete cancelled and stale scans |
+| Script                        | Description                                    |
+| ----------------------------- | ---------------------------------------------- |
+| `inspect_redis.py`            | Inspect Redis cache keys                       |
+| `cache_diagnostic.py`         | Trace cache flow (DB → Redis)                  |
+| `check_cache_status.py`       | Check price cache status                       |
+| `clear_redis_price_cache.py`  | Clear Redis cache after config change          |
+| `force_full_cache_refresh.py` | Force full cache refresh                       |
+| `cleanup_orphaned_scans.py`   | Synchronously delete cancelled and stale scans |
 
 Manual orphaned scan cleanup runs directly:
 
@@ -277,9 +301,9 @@ Scheduled cleanup still runs through the Celery task `app.tasks.cache_tasks.clea
 
 ## Rate Limits
 
-| Source | Limit | Notes |
-|--------|-------|-------|
-| yfinance | 1 req/sec | Self-imposed |
-| Finviz | Rate-limited | Via wrapper |
-| Alpha Vantage | 25 req/day | Free tier |
-| SEC EDGAR | 10 req/sec | 150ms between requests |
+| Source        | Limit        | Notes                  |
+| ------------- | ------------ | ---------------------- |
+| yfinance      | 1 req/sec    | Self-imposed           |
+| Finviz        | Rate-limited | Via wrapper            |
+| Alpha Vantage | 25 req/day   | Free tier              |
+| SEC EDGAR     | 10 req/sec   | 150ms between requests |
