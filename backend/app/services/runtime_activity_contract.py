@@ -6,14 +6,11 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 ACTIVE_ACTIVITY_STATUSES = frozenset({"queued", "running"})
-RUNTIME_PROGRESS_MODES = frozenset({"determinate", "indeterminate"})
-RUNTIME_ACTIVITY_PAYLOAD_FIELDS = frozenset({
+PERSISTED_RUNTIME_ACTIVITY_FIELDS = frozenset({
     "market",
     "lifecycle",
     "stage_key",
-    "stage_label",
     "status",
-    "progress_mode",
     "percent",
     "current",
     "total",
@@ -149,7 +146,7 @@ class RuntimeActivityRecord:
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "RuntimeActivityRecord":
-        missing_fields = RUNTIME_ACTIVITY_PAYLOAD_FIELDS.difference(payload)
+        missing_fields = PERSISTED_RUNTIME_ACTIVITY_FIELDS.difference(payload)
         if missing_fields:
             missing = ", ".join(sorted(missing_fields))
             raise ValueError(f"missing required runtime activity fields: {missing}")
@@ -159,9 +156,6 @@ class RuntimeActivityRecord:
         lifecycle = str(payload.get("lifecycle") or "")
         if not lifecycle:
             raise ValueError("missing lifecycle")
-        raw_progress_mode = str(payload.get("progress_mode") or "")
-        if raw_progress_mode not in RUNTIME_PROGRESS_MODES:
-            raise ValueError(f"invalid progress_mode: {raw_progress_mode}")
         current = payload.get("current")
         total = payload.get("total")
 
@@ -176,14 +170,10 @@ class RuntimeActivityRecord:
             market=str(payload.get("market") or "").upper(),
             lifecycle=lifecycle,
             stage_key=stage_key,
-            stage_label=(
-                str(payload["stage_label"])
-                if payload.get("stage_label") is not None
-                else None
-            ),
+            stage_label=stage_label(stage_key),
             status=status,
-            progress_mode=raw_progress_mode,
-            percent=percent,
+            progress_mode=progress_mode(status, percent, current, total),
+            percent=resolve_progress_percent(percent, current, total),
             current=current,
             total=total,
             message=(
@@ -212,6 +202,21 @@ class RuntimeActivityRecord:
             "stage_label": self.stage_label,
             "status": self.status,
             "progress_mode": self.progress_mode,
+            "percent": self.percent,
+            "current": self.current,
+            "total": self.total,
+            "message": self.message,
+            "task_name": self.task_name,
+            "task_id": self.task_id,
+            "updated_at": self.updated_at,
+        }
+
+    def to_persisted_payload(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "lifecycle": self.lifecycle,
+            "stage_key": self.stage_key,
+            "status": self.status,
             "percent": self.percent,
             "current": self.current,
             "total": self.total,

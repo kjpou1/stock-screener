@@ -26,7 +26,6 @@ def test_reduce_market_activity_operates_on_typed_records():
     transition = reduce_market_activity(
         existing,
         incoming,
-        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
     assert transition.should_persist is False
@@ -42,8 +41,19 @@ def test_reduce_market_activity_accepts_new_cycle_with_typed_records():
     transition = reduce_market_activity(
         existing,
         incoming,
-        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
     assert transition.should_persist is True
     assert transition.record == incoming
+
+
+def test_reduce_market_activity_rejects_ownerless_progress_over_completed_record():
+    from app.services.runtime_activity_reducer import reduce_market_activity
+
+    existing = _record(status="completed", stage_key="prices", task_id="task-old")
+    incoming = _record(status="running", stage_key="prices", task_id=None)
+
+    transition = reduce_market_activity(existing, incoming)
+
+    assert transition.should_persist is False
+    assert transition.record == existing

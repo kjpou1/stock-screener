@@ -321,7 +321,7 @@ def test_smart_refresh_cache_retries_transient_database_errors_from_task_body(mo
     fake_lock.release.assert_called_once_with("task-123", market=None)
     fake_coordination.release_external_fetch.assert_called_once_with("task-123")
     fake_coordination.release_market_workload.assert_called_once_with("task-123", market=None)
-    module.safe_rollback.assert_not_called()
+    module.safe_rollback.assert_called_once_with(fake_db)
 
 
 def test_smart_refresh_cache_publishes_running_progress_per_batch(monkeypatch):

@@ -430,14 +430,14 @@ describe('BootstrapSetupScreen', () => {
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
   });
 
-  it('uses the active secondary market for stage-local progress after the primary market completes', () => {
+  it('uses backend stage-weighted secondary bootstrap progress after the primary market completes', () => {
     useRuntimeActivityMock.mockReturnValue({
       data: {
         bootstrap: {
           primary_market: 'US',
           current_stage: 'Price Refresh',
           progress_mode: 'determinate',
-          percent: 32,
+          percent: 22,
           current: 1200,
           total: 3750,
           message: 'Refreshing market prices',
@@ -482,7 +482,7 @@ describe('BootstrapSetupScreen', () => {
       />
     );
 
-    expect(screen.getByText('32%')).toBeInTheDocument();
+    expect(screen.getByText('22%')).toBeInTheDocument();
     expect(screen.getByText('1,200 / 3,750 stocks')).toBeInTheDocument();
     expect(screen.queryByText('100%')).not.toBeInTheDocument();
     expect(screen.getAllByText(/Refreshing market prices/).length).toBeGreaterThan(0);

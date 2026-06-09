@@ -13,11 +13,8 @@ def _preparation(*, refresh_plan, all_symbols=None):
     )
 
 
-def test_price_refresh_action_factory_returns_explicit_live_action_when_plan_has_symbols():
-    from app.services.price_refresh_actions import (
-        LivePriceRefreshAction,
-        PriceRefreshActionFactory,
-    )
+def test_price_refresh_action_factory_returns_no_completion_when_plan_has_symbols():
+    from app.services.price_refresh_actions import PriceRefreshActionFactory
     from app.services.price_refresh_planning import PriceRefreshMode, PriceRefreshPlan
 
     factory = PriceRefreshActionFactory(
@@ -26,7 +23,7 @@ def test_price_refresh_action_factory_returns_explicit_live_action_when_plan_has
         )
     )
 
-    action = factory.build(
+    completion = factory.build_terminal_completion(
         mode=PriceRefreshMode.BOOTSTRAP,
         effective_market="JP",
         preparation=_preparation(
@@ -34,17 +31,13 @@ def test_price_refresh_action_factory_returns_explicit_live_action_when_plan_has
         ),
     )
 
-    assert isinstance(action, LivePriceRefreshAction)
-    assert action.preparation.refresh_plan.symbols == ("7203.T",)
+    assert completion is None
 
 
-def test_price_refresh_action_factory_returns_explicit_terminal_action():
+def test_price_refresh_action_factory_returns_terminal_completion():
     from datetime import date
 
-    from app.services.price_refresh_actions import (
-        PriceRefreshActionFactory,
-        TerminalPriceRefreshAction,
-    )
+    from app.services.price_refresh_actions import PriceRefreshActionFactory
     from app.services.price_refresh_planning import (
         GitHubSeedOutcome,
         PriceRefreshMode,
@@ -70,7 +63,7 @@ def test_price_refresh_action_factory_returns_explicit_terminal_action():
         last_completed_trading_day=lambda market: date(2026, 6, 7)
     )
 
-    action = factory.build(
+    completion = factory.build_terminal_completion(
         mode=PriceRefreshMode.BOOTSTRAP,
         effective_market="JP",
         preparation=_preparation(
@@ -79,8 +72,7 @@ def test_price_refresh_action_factory_returns_explicit_terminal_action():
         ),
     )
 
-    assert isinstance(action, TerminalPriceRefreshAction)
-    completion = action.completion
+    assert completion is not None
     assert completion.outcome.source is PriceRefreshSource.GITHUB
     assert completion.outcome.github_seed is github_seed
     assert completion.outcome.message == plan.completion_message

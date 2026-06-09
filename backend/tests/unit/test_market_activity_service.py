@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -160,7 +161,7 @@ def test_runtime_activity_status_marks_running_stage_without_real_percent_as_ind
     assert us_market["percent"] is None
 
 
-def test_runtime_activity_record_from_payload_preserves_explicit_contract_fields():
+def test_runtime_activity_record_from_payload_derives_response_fields():
     from app.services.runtime_activity_contract import RuntimeActivityRecord
 
     record = RuntimeActivityRecord.from_payload(
@@ -168,9 +169,7 @@ def test_runtime_activity_record_from_payload_preserves_explicit_contract_fields
             "market": "jp",
             "lifecycle": "bootstrap",
             "stage_key": "prices",
-            "stage_label": "Live Price Backfill",
             "status": "running",
-            "progress_mode": "indeterminate",
             "percent": None,
             "current": 25,
             "total": 100,
@@ -182,15 +181,15 @@ def test_runtime_activity_record_from_payload_preserves_explicit_contract_fields
     )
 
     assert record.market == "JP"
-    assert record.stage_label == "Live Price Backfill"
-    assert record.progress_mode == "indeterminate"
-    assert record.percent is None
+    assert record.stage_label == "Price Refresh"
+    assert record.progress_mode == "determinate"
+    assert record.percent == 25.0
     assert record.current == 25
     assert record.total == 100
     assert record.message == "Waiting on provider"
 
 
-def test_runtime_activity_record_from_payload_rejects_invalid_contract_fields():
+def test_runtime_activity_record_from_payload_rejects_missing_persisted_fields():
     from app.services.runtime_activity_contract import RuntimeActivityRecord
 
     with pytest.raises(ValueError, match="missing required runtime activity fields"):
@@ -204,24 +203,55 @@ def test_runtime_activity_record_from_payload_rejects_invalid_contract_fields():
             }
         )
 
-    with pytest.raises(ValueError, match="invalid progress_mode"):
-        RuntimeActivityRecord.from_payload(
-            {
-                "market": "US",
-                "lifecycle": "bootstrap",
-                "stage_key": "prices",
-                "stage_label": "Price Refresh",
-                "status": "running",
-                "progress_mode": "mostly",
-                "percent": 50,
-                "current": 50,
-                "total": 100,
-                "message": "Refreshing prices",
-                "task_name": "smart_refresh_cache",
-                "task_id": "task-us",
-                "updated_at": "2026-06-09T01:02:03+00:00",
-            }
-        )
+    record = RuntimeActivityRecord.from_payload(
+        {
+            "market": "US",
+            "lifecycle": "bootstrap",
+            "stage_key": "prices",
+            "stage_label": "Stale Label",
+            "status": "running",
+            "progress_mode": "mostly",
+            "percent": 50,
+            "current": 50,
+            "total": 100,
+            "message": "Refreshing prices",
+            "task_name": "smart_refresh_cache",
+            "task_id": "task-us",
+            "updated_at": "2026-06-09T01:02:03+00:00",
+        }
+    )
+    assert record.stage_label == "Price Refresh"
+    assert record.progress_mode == "determinate"
+
+
+def test_market_activity_persists_only_canonical_state_fields(db_session):
+    from app.models.app_settings import AppSetting
+    from app.services import market_activity_service as module
+    from app.services.market_activity_service import _activity_key
+
+    returned = module.mark_market_activity_started(
+        db_session,
+        market="JP",
+        stage_key="prices",
+        lifecycle="bootstrap",
+        task_name="smart_refresh_cache",
+        task_id="task-jp",
+        current=25,
+        total=100,
+        message="Refreshing prices",
+    )
+
+    setting = (
+        db_session.query(AppSetting)
+        .filter(AppSetting.key == _activity_key("JP"))
+        .one()
+    )
+    persisted = json.loads(setting.value)
+
+    assert returned["stage_label"] == "Price Refresh"
+    assert returned["progress_mode"] == "determinate"
+    assert "stage_label" not in persisted
+    assert "progress_mode" not in persisted
 
 
 def test_mark_market_activity_progress_updates_running_record_with_determinate_progress(
@@ -830,7 +860,7 @@ def test_runtime_activity_status_reports_active_background_bootstrap_progress_af
     assert payload["bootstrap"]["state"] == "ready"
     assert payload["bootstrap"]["app_ready"] is True
     assert payload["bootstrap"]["progress_mode"] == "determinate"
-    assert payload["bootstrap"]["percent"] == 32.0
+    assert payload["bootstrap"]["percent"] == pytest.approx(38.67)
     assert payload["bootstrap"]["current"] == 1200
     assert payload["bootstrap"]["total"] == 3750
     assert payload["bootstrap"]["current_stage"] == "Fundamentals Refresh"
@@ -842,6 +872,49 @@ def test_runtime_activity_status_reports_active_background_bootstrap_progress_af
     assert hk_market["lifecycle"] == "bootstrap"
     assert hk_market["status"] == "running"
     assert hk_market["progress_mode"] == "determinate"
+
+
+def test_runtime_activity_status_stage_weights_completed_background_price_refresh(
+    db_session,
+    monkeypatch,
+):
+    from app.services import market_activity_service as module
+
+    module.mark_market_activity_completed(
+        db_session,
+        market="US",
+        stage_key="snapshot",
+        lifecycle="bootstrap",
+        task_name="build_daily_snapshot",
+        task_id="task-us",
+        message="Primary bootstrap complete",
+    )
+    module.mark_market_activity_started(
+        db_session,
+        market="JP",
+        stage_key="prices",
+        lifecycle="bootstrap",
+        task_name="smart_refresh_cache",
+        task_id="task-jp",
+        current=3750,
+        total=3750,
+        message="Refreshing market prices",
+    )
+    monkeypatch.setattr(
+        module,
+        "get_runtime_bootstrap_status",
+        lambda _db: _bootstrap_status(required=False, enabled=["US", "JP"], state="ready"),
+    )
+    monkeypatch.setattr(module, "get_data_fetch_lock", lambda: _FakeLock())
+
+    payload = module.get_runtime_activity_status(db_session)
+
+    assert payload["bootstrap"]["state"] == "ready"
+    assert payload["bootstrap"]["app_ready"] is True
+    assert payload["bootstrap"]["current_stage"] == "Price Refresh"
+    assert payload["bootstrap"]["percent"] == pytest.approx(33.33)
+    assert payload["bootstrap"]["current"] == 3750
+    assert payload["bootstrap"]["total"] == 3750
 
 
 def test_runtime_activity_status_ignores_non_bootstrap_secondary_progress_after_primary_ready(

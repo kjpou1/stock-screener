@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Set
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from .runtime_activity_contract import RuntimeActivityRecord, stage_index
 
 _OPTIONAL_FAILURE_SCAN_SUPERSEDE_STAGES = frozenset({"groups"})
+_PRESERVED_EXISTING_STATUSES = frozenset({"running", "completed", "failed"})
 
 
 @dataclass(frozen=True)
@@ -37,8 +38,6 @@ def _coerce_activity_record(
 def reduce_market_activity(
     existing_payload: RuntimeActivityRecord | Mapping[str, Any] | None,
     incoming_payload: RuntimeActivityRecord | Mapping[str, Any],
-    *,
-    preserve_existing_statuses: Set[str] | None = None,
 ) -> RuntimeActivityTransition:
     """Return the activity payload that should win this state transition."""
     incoming = _coerce_activity_record(incoming_payload)
@@ -46,17 +45,18 @@ def reduce_market_activity(
         raise ValueError("incoming runtime activity payload is invalid")
 
     existing = _coerce_activity_record(existing_payload)
-    if not preserve_existing_statuses or existing is None:
+    if existing is None:
         return RuntimeActivityTransition(should_persist=True, record=incoming)
 
     existing_status = existing.status
-    if existing_status not in preserve_existing_statuses:
+    if existing_status not in _PRESERVED_EXISTING_STATUSES:
         return RuntimeActivityTransition(should_persist=True, record=incoming)
 
     payload_status = incoming.status
     same_task = existing.task_id == incoming.task_id
     same_stage = existing.stage_key == incoming.stage_key
     same_owner = same_task and same_stage
+    incoming_has_owner = incoming.task_id is not None
 
     if existing_status == "running":
         if payload_status == "queued" or (
@@ -68,13 +68,19 @@ def reduce_market_activity(
     elif existing_status == "completed":
         if payload_status != "failed":
             incoming_new_cycle = (
-                payload_status in {"queued", "running"} and not same_owner
+                payload_status in {"queued", "running"}
+                and incoming_has_owner
+                and not same_owner
             )
             if not incoming_new_cycle:
                 return RuntimeActivityTransition(should_persist=False, record=existing)
     elif existing_status == "failed":
         supersedes_failed_activity = _should_supersede_failed_activity(existing, incoming)
-        incoming_new_cycle = payload_status in {"queued", "running"} and not same_owner
+        incoming_new_cycle = (
+            payload_status in {"queued", "running"}
+            and incoming_has_owner
+            and not same_owner
+        )
         if incoming_new_cycle:
             existing_stage_index = stage_index(existing.stage_key)
             payload_stage_index = stage_index(incoming.stage_key)

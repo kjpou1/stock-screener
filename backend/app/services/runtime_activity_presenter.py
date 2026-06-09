@@ -70,7 +70,11 @@ def build_runtime_activity_status(
 
     if bootstrap_status.bootstrap_state == "ready" and secondary_active_record:
         bootstrap_progress_mode = secondary_active_record.progress_mode or "indeterminate"
-        bootstrap_percent = secondary_active_record.percent
+        bootstrap_percent = (
+            _bootstrap_progress_percent(secondary_active_record)
+            if bootstrap_progress_mode == "determinate"
+            else None
+        )
         bootstrap_stage = secondary_active_record.stage_label
         bootstrap_message = secondary_active_record.message or "Additional market loading continues."
         bootstrap_current = secondary_active_record.current

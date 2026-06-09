@@ -48,20 +48,6 @@ class PriceRefreshTerminalCompletion:
     finalization: PriceRefreshFinalization
 
 
-@dataclass(frozen=True)
-class LivePriceRefreshAction:
-    preparation: PriceRefreshPreparation
-
-
-@dataclass(frozen=True)
-class TerminalPriceRefreshAction:
-    preparation: PriceRefreshPreparation
-    completion: PriceRefreshTerminalCompletion
-
-
-PriceRefreshAction = LivePriceRefreshAction | TerminalPriceRefreshAction
-
-
 class PriceRefreshActionFactory:
     def __init__(
         self,
@@ -70,23 +56,20 @@ class PriceRefreshActionFactory:
     ) -> None:
         self._last_completed_trading_day = last_completed_trading_day
 
-    def build(
+    def build_terminal_completion(
         self,
         *,
         mode: PriceRefreshMode,
         effective_market: str,
         preparation: PriceRefreshPreparation,
-    ) -> PriceRefreshAction:
+    ) -> PriceRefreshTerminalCompletion | None:
         if preparation.symbols:
-            return LivePriceRefreshAction(preparation=preparation)
+            return None
 
-        return TerminalPriceRefreshAction(
+        return self._terminal_completion(
+            mode=mode,
+            effective_market=effective_market,
             preparation=preparation,
-            completion=self._terminal_completion(
-                mode=mode,
-                effective_market=effective_market,
-                preparation=preparation,
-            ),
         )
 
     def _terminal_completion(

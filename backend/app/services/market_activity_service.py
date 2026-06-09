@@ -89,8 +89,6 @@ def _save_market_activity(
     db: Session,
     market: str,
     payload: dict[str, Any],
-    *,
-    preserve_existing_statuses: set[str] | None = None,
 ) -> dict[str, Any]:
     key = _activity_key(market)
     setting = _get_setting(db, key)
@@ -104,13 +102,12 @@ def _save_market_activity(
     transition = reduce_market_activity(
         existing_payload if isinstance(existing_payload, dict) else None,
         payload,
-        preserve_existing_statuses=preserve_existing_statuses,
     )
     if not transition.should_persist:
         return transition.payload
-    payload = transition.payload
+    record = transition.record
 
-    encoded = json.dumps(payload)
+    encoded = json.dumps(record.to_persisted_payload())
     if setting is None:
         setting = AppSetting(
             key=key,
@@ -124,7 +121,7 @@ def _save_market_activity(
         setting.category = RUNTIME_ACTIVITY_CATEGORY
         setting.description = f"Latest runtime activity state for {market.upper()}"
     db.commit()
-    return payload
+    return record.to_payload()
 
 
 def _activity_payload(
@@ -177,7 +174,6 @@ def mark_market_activity_queued(
             task_id=task_id,
             message=message,
         ),
-        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 
@@ -209,7 +205,6 @@ def mark_market_activity_started(
             total=total,
             message=message,
         ),
-        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 
@@ -231,17 +226,17 @@ def mark_market_activity_progress(
         existing_task_id = existing.get("task_id")
         existing_stage_key = existing.get("stage_key")
         existing_status = existing.get("status")
-        if existing_status in {"completed", "failed"}:
-            return existing
-        if existing_task_id and task_id and existing_task_id != task_id:
-            return existing
-        if existing_stage_key and existing_stage_key != stage_key:
-            return existing
-        stage_key = existing_stage_key or stage_key
-        lifecycle = lifecycle or existing.get("lifecycle")
-        task_name = task_name or existing.get("task_name")
-        task_id = task_id or existing_task_id
-        message = message or existing.get("message")
+        can_inherit_existing_metadata = (
+            existing_status in {"queued", "running"}
+            and (not existing_task_id or not task_id or existing_task_id == task_id)
+            and (not existing_stage_key or existing_stage_key == stage_key)
+        )
+        if can_inherit_existing_metadata:
+            stage_key = existing_stage_key or stage_key
+            lifecycle = lifecycle or existing.get("lifecycle")
+            task_name = task_name or existing.get("task_name")
+            task_id = task_id or existing_task_id
+            message = message or existing.get("message")
 
     return _save_market_activity(
         db,
@@ -258,7 +253,6 @@ def mark_market_activity_progress(
             total=total,
             message=message,
         ),
-        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 
@@ -290,7 +284,6 @@ def mark_market_activity_completed(
             total=total,
             message=message,
         ),
-        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 
@@ -322,7 +315,6 @@ def mark_market_activity_failed(
             total=total,
             message=message,
         ),
-        preserve_existing_statuses={"running", "completed", "failed"},
     )
 
 

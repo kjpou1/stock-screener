@@ -13,10 +13,9 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from ..config import settings
 from ..services.price_refresh_actions import (
-    PriceRefreshAction,
     PriceRefreshActionFactory,
     PriceRefreshPreparation,
-    TerminalPriceRefreshAction,
+    PriceRefreshTerminalCompletion,
 )
 from ..services.price_refresh_activity import (
     CeleryTaskLike,
@@ -154,20 +153,20 @@ class PriceRefreshWorkflow:
                 activity_lifecycle=activity_lifecycle,
                 log_extra=log_extra,
             )
-            action = self._build_executable_action(
+            terminal_completion = self._build_terminal_completion(
                 mode=parsed_mode,
                 effective_market=effective_market,
                 preparation=preparation,
             )
-            if isinstance(action, TerminalPriceRefreshAction):
-                return self._complete_terminal_action(
+            if terminal_completion is not None:
+                return self._complete_terminal_refresh(
                     db,
                     price_cache,
                     task=task,
                     market=market,
                     effective_market=effective_market,
                     activity_lifecycle=activity_lifecycle,
-                    action=action,
+                    completion=terminal_completion,
                 )
 
             outcome = self._execute_live_refresh(
@@ -178,7 +177,7 @@ class PriceRefreshWorkflow:
                 market=market,
                 effective_market=effective_market,
                 activity_lifecycle=activity_lifecycle,
-                preparation=action.preparation,
+                preparation=preparation,
             )
             return outcome.to_task_result()
 
@@ -228,9 +227,9 @@ class PriceRefreshWorkflow:
             )
             raise
         except Exception as exc:
+            self._deps.safe_rollback(db)
             self._deps.raise_if_transient_database_error(exc)
             logger.error("Error in smart_refresh_cache task: %s", exc, exc_info=True)
-            self._deps.safe_rollback(db)
             summary = PriceRefreshExecutionSummary.empty()
             self._record_refresh_failure(
                 db,
@@ -380,13 +379,13 @@ class PriceRefreshWorkflow:
         )
         return preparation
 
-    def _build_executable_action(
+    def _build_terminal_completion(
         self,
         *,
         mode: PriceRefreshMode,
         effective_market: str,
         preparation: PriceRefreshPreparation,
-    ) -> PriceRefreshAction:
+    ) -> PriceRefreshTerminalCompletion | None:
         def last_completed_trading_day(action_market: str) -> Any:
             return (
                 self._deps.market_calendar_service_factory()
@@ -395,13 +394,13 @@ class PriceRefreshWorkflow:
 
         return PriceRefreshActionFactory(
             last_completed_trading_day=last_completed_trading_day,
-        ).build(
+        ).build_terminal_completion(
             mode=mode,
             effective_market=effective_market,
             preparation=preparation,
         )
 
-    def _complete_terminal_action(
+    def _complete_terminal_refresh(
         self,
         db,
         price_cache,
@@ -410,7 +409,7 @@ class PriceRefreshWorkflow:
         market: str | None,
         effective_market: str,
         activity_lifecycle: str,
-        action: TerminalPriceRefreshAction,
+        completion: PriceRefreshTerminalCompletion,
     ) -> dict[str, Any]:
         self._deps.activity_reporter.finalize_success(
             db,
@@ -419,9 +418,9 @@ class PriceRefreshWorkflow:
             market=market,
             effective_market=effective_market,
             lifecycle=activity_lifecycle,
-            finalization=action.completion.finalization,
+            finalization=completion.finalization,
         )
-        return action.completion.outcome.to_task_result()
+        return completion.outcome.to_task_result()
 
     def _execute_live_refresh(
         self,
