@@ -27,46 +27,29 @@ const STATUS_COLOR = {
   failed: 'error',
   idle: 'default',
 };
-const ACTIVE_MARKET_STATUSES = new Set(['running', 'queued']);
-const STAGE_LOCAL_PROGRESS_KEYS = new Set(['prices', 'fundamentals', 'scan']);
+
+const FALLBACK_BOOTSTRAP_STAGES = [
+  { key: 'universe', label: 'Universe Refresh' },
+  { key: 'prices', label: 'Price Refresh' },
+  { key: 'fundamentals', label: 'Fundamentals Refresh' },
+  { key: 'breadth', label: 'Breadth Calculation' },
+  { key: 'groups', label: 'Group Rankings' },
+  { key: 'scan', label: 'Scan' },
+];
 
 function formatCount(value) {
   return new Intl.NumberFormat('en-US').format(value);
 }
 
-function resolveDeterminatePercent(percent, current, total) {
-  if (Number.isFinite(percent)) {
-    return Math.max(0, Math.min(100, Number(percent)));
-  }
-  if (current != null && total != null && total > 0) {
-    return Math.max(0, Math.min(100, (Number(current) / Number(total)) * 100));
-  }
-  return null;
-}
-
-function resolveStageLocalProgress(activity) {
-  if (!activity) {
+function normalizeProgressPercent(percent) {
+  if (percent === null || percent === undefined) {
     return null;
   }
-  const stageKey = activity.stage_key || '';
-  if (!STAGE_LOCAL_PROGRESS_KEYS.has(stageKey)) {
+  const value = Number(percent);
+  if (!Number.isFinite(value)) {
     return null;
   }
-  const percent = resolveDeterminatePercent(activity.percent, activity.current, activity.total);
-  if (percent === null) {
-    return null;
-  }
-  return {
-    percent,
-    detail: (
-      activity.current !== null
-      && activity.current !== undefined
-      && activity.total !== null
-      && activity.total !== undefined
-    )
-      ? `${formatCount(activity.current)} / ${formatCount(activity.total)} stocks`
-      : null,
-  };
+  return Math.max(0, Math.min(100, value));
 }
 
 function normalizeEnabled(primaryMarket, enabledMarkets) {
@@ -74,6 +57,19 @@ function normalizeEnabled(primaryMarket, enabledMarkets) {
     ? enabledMarkets
     : [primaryMarket, ...enabledMarkets];
   return Array.from(new Set(next));
+}
+
+function normalizeStages(stages) {
+  if (!Array.isArray(stages) || stages.length === 0) {
+    return FALLBACK_BOOTSTRAP_STAGES;
+  }
+  const normalized = stages
+    .map((stage) => ({
+      key: stage?.key,
+      label: stage?.label || stage?.key,
+    }))
+    .filter((stage) => stage.key && stage.label);
+  return normalized.length > 0 ? normalized : FALLBACK_BOOTSTRAP_STAGES;
 }
 
 export default function BootstrapSetupScreen({
@@ -119,60 +115,38 @@ export default function BootstrapSetupScreen({
   const running = bootstrapState === 'running';
   const activityQuery = useRuntimeActivity({ enabled: running || isStartingBootstrap });
   const bootstrap = activityQuery.data?.bootstrap ?? null;
-  const marketActivity = useMemo(() => {
-    const markets = activityQuery.data?.markets ?? [];
-    const byMarket = new Map(markets.map((item) => [item.market, item]));
-    return normalizedSelection.map((market) => (
-      byMarket.get(market) ?? {
-        market,
-        lifecycle: running ? 'bootstrap' : 'idle',
-        stage_label: running ? 'Queued' : 'Idle',
-        status: running && market === (bootstrap?.primary_market || primaryMarket) ? 'running' : 'queued',
-        message: running ? 'Waiting for bootstrap task' : 'Idle',
-      }
-    ));
-  }, [activityQuery.data?.markets, bootstrap?.primary_market, normalizedSelection, primaryMarket, running]);
-  const primaryActivity = useMemo(
-    () => marketActivity.find((market) => market.market === (primaryMarket || selectedPrimary)) ?? marketActivity[0],
-    [marketActivity, primaryMarket, selectedPrimary]
+  const marketActivity = useMemo(
+    () => activityQuery.data?.markets ?? [],
+    [activityQuery.data?.markets]
   );
-  const focusedActivity = useMemo(
-    () => (
-      marketActivity.find((market) => market.status === 'running')
-      ?? marketActivity.find((market) => ACTIVE_MARKET_STATUSES.has(market.status))
-      ?? primaryActivity
-    ),
-    [marketActivity, primaryActivity]
+  const bootstrapResolvedPercent = normalizeProgressPercent(bootstrap?.percent);
+  const requestedBootstrapProgressMode = (
+    bootstrap?.progress_mode
+    || 'indeterminate'
   );
-  const stageLocalProgress = resolveStageLocalProgress(focusedActivity);
   const bootstrapProgressMode = (
-    stageLocalProgress ? 'determinate' : (
-      bootstrap?.progress_mode
-      || focusedActivity?.progress_mode
-      || 'indeterminate'
-    )
-  );
-  const bootstrapResolvedPercent = resolveDeterminatePercent(
-    bootstrap?.percent,
-    bootstrap?.current,
-    bootstrap?.total,
-  );
-  const focusedActivityResolvedPercent = resolveDeterminatePercent(
-    focusedActivity?.percent,
-    focusedActivity?.current,
-    focusedActivity?.total,
+    requestedBootstrapProgressMode === 'determinate' && bootstrapResolvedPercent === null
+      ? 'indeterminate'
+      : requestedBootstrapProgressMode
   );
   const bootstrapPercent = (
     bootstrapProgressMode === 'determinate'
-      ? (stageLocalProgress?.percent
-        ?? focusedActivityResolvedPercent
-        ?? bootstrapResolvedPercent
-        ?? 0)
+      ? bootstrapResolvedPercent
       : null
   );
-  const bootstrapMessage = stageLocalProgress
-    ? (focusedActivity?.message || bootstrap?.message || 'Preparing market data.')
-    : (bootstrap?.message || focusedActivity?.message || 'Preparing market data.');
+  const bootstrapProgressDetail = (
+    bootstrap?.current !== null
+    && bootstrap?.current !== undefined
+    && bootstrap?.total !== null
+    && bootstrap?.total !== undefined
+  )
+    ? `${formatCount(bootstrap.current)} / ${formatCount(bootstrap.total)} stocks`
+    : null;
+  const bootstrapMessage = bootstrap?.message || 'Preparing market data.';
+  const bootstrapStages = useMemo(
+    () => normalizeStages(bootstrap?.stages),
+    [bootstrap?.stages]
+  );
 
   const toggleMarket = (market) => {
     if (market === selectedPrimary) {
@@ -222,8 +196,8 @@ export default function BootstrapSetupScreen({
                 First-run market bootstrap
               </Typography>
               <Typography color="text.secondary">
-                Pick the primary market for startup defaults. The workspace opens after every
-                enabled market finishes its first scan-backed snapshot.
+                Pick the primary market for startup defaults. The workspace opens after the
+                primary market finishes its first scan-backed snapshot.
               </Typography>
             </Box>
 
@@ -236,8 +210,8 @@ export default function BootstrapSetupScreen({
             {running && (
               <Stack spacing={2}>
                 <Alert severity="info">
-                  Initial sync is running. The workspace will open after all enabled markets have
-                  current data and a published scan.
+                  Initial sync is running. The workspace will open after the primary market has
+                  current data and a published scan. Additional markets continue loading in the background.
                 </Alert>
                 <Box
                   sx={{
@@ -251,7 +225,7 @@ export default function BootstrapSetupScreen({
                   <Stack spacing={1.5}>
                     <Stack direction="row" justifyContent="space-between" alignItems="center">
                       <Typography variant="subtitle2">
-                        {bootstrap?.current_stage || focusedActivity?.stage_label || 'Preparing bootstrap'}
+                        {bootstrap?.current_stage || 'Preparing bootstrap'}
                       </Typography>
                       {bootstrapProgressMode === 'determinate' && bootstrapPercent !== null && (
                         <Typography variant="body2" color="text.secondary">
@@ -264,9 +238,9 @@ export default function BootstrapSetupScreen({
                       value={bootstrapProgressMode === 'determinate' ? bootstrapPercent : undefined}
                       aria-label="Bootstrap progress"
                     />
-                    {stageLocalProgress?.detail && (
+                    {bootstrapProgressDetail && (
                       <Typography variant="caption" color="text.secondary">
-                        {stageLocalProgress.detail}
+                        {bootstrapProgressDetail}
                       </Typography>
                     )}
                     <Typography variant="body2" color="text.secondary">
@@ -274,48 +248,51 @@ export default function BootstrapSetupScreen({
                     </Typography>
                   </Stack>
                 </Box>
-                <Alert severity="warning">
-                  {bootstrap?.background_warning
-                    || 'Keep this setup screen open until every enabled market finishes its bootstrap pipeline.'}
-                </Alert>
-                <Box>
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                    Enabled market queue
-                  </Typography>
-                  <Stack spacing={1}>
-                    {marketActivity.map((market) => (
-                      <Box
-                        key={market.market}
-                        sx={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: 2,
-                          px: 1.5,
-                          py: 1,
-                          borderRadius: 1.5,
-                          border: 1,
-                          borderColor: 'divider',
-                        }}
-                      >
-                        <Box>
-                          <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                            {market.market}
-                            {market.market === (bootstrap?.primary_market || primaryMarket) ? ' (primary)' : ''}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            {market.stage_label || 'Queued'}{market.message ? ` · ${market.message}` : ''}
-                          </Typography>
+                {bootstrap?.background_warning && (
+                  <Alert severity="warning">
+                    {bootstrap.background_warning}
+                  </Alert>
+                )}
+                {marketActivity.length > 0 && (
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                      Enabled market queue
+                    </Typography>
+                    <Stack spacing={1}>
+                      {marketActivity.map((market) => (
+                        <Box
+                          key={market.market}
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 2,
+                            px: 1.5,
+                            py: 1,
+                            borderRadius: 1.5,
+                            border: 1,
+                            borderColor: 'divider',
+                          }}
+                        >
+                          <Box>
+                            <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                              {market.market}
+                              {market.market === (bootstrap?.primary_market || primaryMarket) ? ' (primary)' : ''}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {market.stage_label || 'Queued'}{market.message ? ` · ${market.message}` : ''}
+                            </Typography>
+                          </Box>
+                          <Chip
+                            size="small"
+                            color={STATUS_COLOR[market.status] || 'default'}
+                            label={market.status || 'idle'}
+                          />
                         </Box>
-                        <Chip
-                          size="small"
-                          color={STATUS_COLOR[market.status] || 'default'}
-                          label={market.status || 'idle'}
-                        />
-                      </Box>
-                    ))}
-                  </Stack>
-                </Box>
+                      ))}
+                    </Stack>
+                  </Box>
+                )}
               </Stack>
             )}
 
@@ -365,21 +342,11 @@ export default function BootstrapSetupScreen({
               <Typography variant="subtitle2" sx={{ mb: 1 }}>
                 Bootstrap order
               </Typography>
-              <Typography color="text.secondary">
-                1. Universe refresh
-              </Typography>
-              <Typography color="text.secondary">
-                2. Benchmark and price refresh
-              </Typography>
-              <Typography color="text.secondary">
-                3. Fundamentals refresh
-              </Typography>
-              <Typography color="text.secondary">
-                4. Breadth and group rankings
-              </Typography>
-              <Typography color="text.secondary">
-                5. Initial autoscan snapshot
-              </Typography>
+              {bootstrapStages.map((stage, index) => (
+                <Typography key={stage.key} color="text.secondary">
+                  {index + 1}. {stage.label}
+                </Typography>
+              ))}
             </Box>
 
             <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>

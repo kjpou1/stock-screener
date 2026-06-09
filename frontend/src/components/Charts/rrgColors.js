@@ -17,3 +17,9 @@ export const QUADRANT_FILLS = {
 };
 
 export const quadrantColor = (q) => QUADRANT_COLORS[q] || '#9e9e9e';
+
+/**
+ * Canonical quadrant order (clockwise rotation cycle) — single source of truth
+ * for the quadrant filter buttons so they stay consistent with the colors above.
+ */
+export const QUADRANTS = ['Improving', 'Leading', 'Weakening', 'Lagging'];

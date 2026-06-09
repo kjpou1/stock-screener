@@ -1,21 +1,57 @@
 /**
- * RRG filter controls: a current-rank range slider + a name multi-select.
- * Presentational only — state lives in useRRGFilters. Shared by the live and
- * static Group Rankings pages via RRGChart.
+ * RRG filter controls: a quadrant multi-select + a current-rank range slider +
+ * a name multi-select. Presentational only — state lives in useRRGFilters.
+ * Shared by the live and static Group Rankings pages via RRGChart.
  */
-import { Autocomplete, TextField, Slider, Box, Typography } from '@mui/material';
+import {
+  Autocomplete,
+  TextField,
+  Slider,
+  Box,
+  Typography,
+  ToggleButton,
+  ToggleButtonGroup,
+} from '@mui/material';
+import { QUADRANTS, QUADRANT_COLORS } from './rrgColors';
 
 export default function RRGFilters({
   scopeLabel,
   names,
   selected,
   onSelected,
+  quadrants,
+  onQuadrants,
   maxRank,
   rankValue,
   onRankChange,
 }) {
   return (
     <>
+      {/* Quadrant multi-select — empty selection means "all shown". Each button
+          is tinted with its quadrant color when active. */}
+      <ToggleButtonGroup
+        size="small"
+        value={quadrants}
+        onChange={(_e, v) => onQuadrants(v)}
+        aria-label="Filter by quadrant"
+      >
+        {QUADRANTS.map((q) => (
+          <ToggleButton
+            key={q}
+            value={q}
+            sx={{
+              textTransform: 'none',
+              '&.Mui-selected': {
+                color: QUADRANT_COLORS[q],
+                borderColor: QUADRANT_COLORS[q],
+                fontWeight: 700,
+              },
+            }}
+          >
+            {q}
+          </ToggleButton>
+        ))}
+      </ToggleButtonGroup>
       {maxRank > 1 && (
         <Box sx={{ width: 200 }}>
           <Typography variant="caption" color="text.secondary">

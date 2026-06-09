@@ -13,6 +13,7 @@ from app.database import SessionLocal
 from app.models.stock_universe import StockUniverse
 from app.scripts._runtime import prepare_runtime, repo_root
 from app.services.bulk_data_fetcher import BulkDataFetcher
+from app.services.price_history_coverage import classify_price_history
 from app.wiring.bootstrap import get_daily_price_bundle_service
 
 
@@ -160,11 +161,12 @@ def bootstrap_cn_daily_price_shard(
     if not shard_symbols:
         raise RuntimeError(f"CN shard {shard_index}/{shard_count} resolved to zero symbols")
 
-    missing_symbols = service.symbols_missing_as_of(
+    coverage = classify_price_history(
         db,
         symbols=shard_symbols,
         as_of_date=as_of_date,
     )
+    missing_symbols = list(coverage.refresh_symbols)
     refreshed_symbols = 0
     failed_symbols = 0
     export_stats: dict[str, Any] | None = None

@@ -2,9 +2,24 @@ name: Static Site
 
 on:
   schedule:
+    # US/EU/Americas group — 4:10pm ET, after US close. Uses the New York
+    # timezone so it tracks DST automatically.
     - cron: '10 16 * * 1-6'
       timezone: 'America/New_York'
+    # Asian group — 6:30pm SGT, after all Asian markets close (incl. India,
+    # which closes 3:30pm IST = 6:00pm SGT; the 30-min buffer lets prices
+    # settle). Singapore has no DST, so 6:30pm SGT == 10:30 UTC year-round.
+    - cron: '30 10 * * 1-5'
   workflow_dispatch:
+    inputs:
+      market_group:
+        description: 'Which market group to build'
+        type: choice
+        default: all
+        options:
+          - all
+          - asia
+          - us
 
 concurrency:
   group: static-site-${{ github.ref }}
@@ -17,6 +32,43 @@ permissions:
   id-token: write
 
 jobs:
+  select-markets:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    outputs:
+      markets: ${{ steps.pick.outputs.markets }}
+    steps:
+      # Resolve which markets this run builds. The schedule that fired
+      # (github.event.schedule) selects the group; manual dispatch uses the
+      # market_group input. The combine job back-fills every market that is NOT
+      # built here from the last good artifact of a previous run, so a partial
+      # group still publishes a complete site.
+      - id: pick
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          MARKET_GROUP: ${{ github.event.inputs.market_group }}
+        run: |
+          ASIA='["HK","IN","JP","KR","TW","CN","SG","MY","AU"]'
+          US='["US","CA","DE"]'
+          ALL='["US","HK","IN","JP","KR","TW","CN","CA","DE","SG","AU","MY"]'
+
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            case "$SCHEDULE" in
+              '30 10 * * 1-5') markets="$ASIA" ;;   # 10:30 UTC = 6:30pm SGT
+              *)               markets="$US" ;;     # 4:10pm ET (America/New_York)
+            esac
+          else
+            case "$MARKET_GROUP" in
+              asia) markets="$ASIA" ;;
+              us)   markets="$US" ;;
+              *)    markets="$ALL" ;;
+            esac
+          fi
+
+          echo "markets=$markets" >> "$GITHUB_OUTPUT"
+          echo "Building markets: $markets"
+
   ensure_daily_price_release:
     if: ${{ github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-latest
@@ -34,12 +86,12 @@ jobs:
 
   build-market:
     if: ${{ github.event_name == 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-    needs: ensure_daily_price_release
+    needs: [select-markets, ensure_daily_price_release]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        market: [US, HK, IN, JP, KR, TW, CN, CA, DE, SG, AU, MY]
+        market: ${{ fromJSON(needs.select-markets.outputs.markets) }}
     services:
       postgres:
         image: postgres:16-alpine
@@ -594,11 +646,49 @@ jobs:
       - name: Validate market artifacts
         run: |
           mkdir -p /tmp/static-market-artifacts-current /tmp/static-market-artifacts-fallback
-          find /tmp/static-market-artifacts-current /tmp/static-market-artifacts-fallback -type f -name 'manifest.market.json'
-          if ! find /tmp/static-market-artifacts-current /tmp/static-market-artifacts-fallback -type f -name 'manifest.market.json' | grep -q .; then
-            echo "No current or fallback market artifacts are available." >&2
-            exit 1
-          fi
+          cd backend
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from app.domain.markets import market_registry
+
+          # Every scheduled run builds only one market group; the rest must be
+          # back-filled from a previous run's artifacts. Publishing is all-or-
+          # nothing: refuse to deploy unless every supported market is present
+          # across current + fallback artifacts, so a partial group run (or a
+          # failed fallback download) can never ship an incomplete static site.
+          expected = {code.upper() for code in market_registry.supported_market_codes()}
+          present = set()
+          for base in (
+              "/tmp/static-market-artifacts-current",
+              "/tmp/static-market-artifacts-fallback",
+          ):
+              for manifest in Path(base).rglob("manifest.market.json"):
+                  try:
+                      market = str(
+                          json.loads(manifest.read_text(encoding="utf-8")).get("market", "")
+                      ).upper()
+                  except (OSError, json.JSONDecodeError, TypeError) as exc:
+                      print(f"::warning::Could not read {manifest}: {exc}", flush=True)
+                      continue
+                  if market:
+                      present.add(market)
+
+          print(f"Expected markets: {', '.join(sorted(expected))}")
+          print(f"Present markets:  {', '.join(sorted(present)) or '(none)'}")
+
+          missing = sorted(expected - present)
+          if missing:
+              print(
+                  "::error::Refusing to publish an incomplete static site. No current "
+                  f"build and no fallback artifact for: {', '.join(missing)}.",
+                  flush=True,
+              )
+              sys.exit(1)
+          print("All supported markets present; static site is complete.")
+          PY
 
       - name: Combine static data bundle
         run: |

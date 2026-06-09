@@ -12,6 +12,7 @@ export const DEFAULT_RUNTIME_ACTIVITY = {
     percent: null,
     message: null,
     background_warning: null,
+    stages: [],
   },
   summary: {
     active_market_count: 0,

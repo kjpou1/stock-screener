@@ -62,10 +62,10 @@ describe('buildTailPoints', () => {
 
 describe('filterGroups', () => {
   const groups = [
-    { industry_group: 'A', rank: 1 },
-    { industry_group: 'B', rank: 10 },
-    { industry_group: 'C', rank: 50 },
-    { industry_group: 'D', rank: null },
+    { industry_group: 'A', rank: 1, quadrant: 'Leading' },
+    { industry_group: 'B', rank: 10, quadrant: 'Improving' },
+    { industry_group: 'C', rank: 50, quadrant: 'Lagging' },
+    { industry_group: 'D', rank: null, quadrant: 'Leading' },
   ];
 
   it('returns everything when no filters are active', () => {
@@ -77,12 +77,18 @@ describe('filterGroups', () => {
     expect(filterGroups(groups, { names: ['A', 'C'] }).map((g) => g.industry_group)).toEqual(['A', 'C']);
   });
 
+  it('filters by selected quadrants', () => {
+    expect(filterGroups(groups, { quadrants: ['Leading'] }).map((g) => g.industry_group)).toEqual(['A', 'D']);
+    expect(filterGroups(groups, { quadrants: ['Improving', 'Lagging'] }).map((g) => g.industry_group)).toEqual(['B', 'C']);
+  });
+
   it('filters by inclusive current-rank range and drops null ranks', () => {
     expect(filterGroups(groups, { rankRange: [1, 10] }).map((g) => g.industry_group)).toEqual(['A', 'B']);
     expect(filterGroups(groups, { rankRange: [10, 50] }).map((g) => g.industry_group)).toEqual(['B', 'C']);
   });
 
-  it('combines name and rank filters with AND', () => {
+  it('combines name, quadrant, and rank filters with AND', () => {
     expect(filterGroups(groups, { names: ['A', 'C'], rankRange: [1, 10] }).map((g) => g.industry_group)).toEqual(['A']);
+    expect(filterGroups(groups, { quadrants: ['Leading'], rankRange: [1, 10] }).map((g) => g.industry_group)).toEqual(['A']);
   });
 });

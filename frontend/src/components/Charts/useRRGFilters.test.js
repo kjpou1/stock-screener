@@ -3,9 +3,9 @@ import { act, renderHook } from '@testing-library/react';
 import { useRRGFilters } from './useRRGFilters';
 
 const groups = [
-  { industry_group: 'A', rank: 1 },
-  { industry_group: 'B', rank: 10 },
-  { industry_group: 'C', rank: 50 },
+  { industry_group: 'A', rank: 1, quadrant: 'Leading' },
+  { industry_group: 'B', rank: 10, quadrant: 'Improving' },
+  { industry_group: 'C', rank: 50, quadrant: 'Lagging' },
 ];
 
 describe('useRRGFilters', () => {
@@ -26,6 +26,12 @@ describe('useRRGFilters', () => {
     const { result } = renderHook(() => useRRGFilters(groups, { scope: 'groups', market: 'US' }));
     act(() => result.current.filter.setSelected(['C']));
     expect(result.current.shown.map((g) => g.industry_group)).toEqual(['C']);
+  });
+
+  it('filters by selected quadrants', () => {
+    const { result } = renderHook(() => useRRGFilters(groups, { scope: 'groups', market: 'US' }));
+    act(() => result.current.filter.setQuadrants(['Leading', 'Lagging']));
+    expect(result.current.shown.map((g) => g.industry_group)).toEqual(['A', 'C']);
   });
 
   it('clamps a stale rank range when maxRank shrinks on a same-scope refresh', () => {
@@ -56,8 +62,10 @@ describe('useRRGFilters', () => {
       { initialProps: { scope: 'groups' } },
     );
     act(() => result.current.filter.setSelected(['C']));
+    act(() => result.current.filter.setQuadrants(['Lagging']));
     expect(result.current.shown).toHaveLength(1);
     rerender({ scope: 'sectors' });
     expect(result.current.shown).toHaveLength(3);
+    expect(result.current.filter.quadrants).toEqual([]);
   });
 });

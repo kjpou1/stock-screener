@@ -12,22 +12,50 @@ from app.domain.markets import market_registry
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
-def _workflow_matrix_markets(path: str) -> list[str]:
+def _weekly_reference_matrix_markets(path: str) -> list[str]:
+    """Parse the weekly-reference matrix from its ``|| '[...]'`` dispatch form."""
     content = (_PROJECT_ROOT / path).read_text(encoding="utf-8")
-    match = re.search(r"market:\s*\[([^\]]+)\]", content)
-    if match is not None:
-        return [market.strip() for market in match.group(1).split(",")]
-
-    dispatch_matrix_match = re.search(r"\|\|\s*'(\[[^']+\])'", content)
-    assert dispatch_matrix_match is not None, f"{path} does not declare a market matrix"
-    return list(json.loads(dispatch_matrix_match.group(1)))
+    match = re.search(r"\|\|\s*'(\[[^']+\])'", content)
+    assert match is not None, f"{path} does not declare a market matrix"
+    return list(json.loads(match.group(1)))
 
 
-def test_static_and_weekly_reference_workflows_cover_supported_markets():
+def _static_site_market_group(name: str) -> list[str]:
+    """Parse a market-group JSON array assigned in the select-markets job.
+
+    The static-site workflow no longer uses a literal matrix; build-market
+    consumes ``fromJSON(needs.select-markets.outputs.markets)`` and the
+    select-markets job derives the group from shell vars like ``ASIA='[...]'``.
+    """
+    content = (_PROJECT_ROOT / ".github/workflows/static-site.yml").read_text(encoding="utf-8")
+    match = re.search(rf"^\s*{name}='(\[[^']*\])'", content, re.MULTILINE)
+    assert match is not None, f"static-site.yml does not define a {name} market group"
+    return list(json.loads(match.group(1)))
+
+
+def test_static_site_all_group_and_weekly_reference_cover_supported_markets():
     expected = list(market_registry.supported_market_codes())
 
-    assert _workflow_matrix_markets(".github/workflows/static-site.yml") == expected
-    assert _workflow_matrix_markets(".github/workflows/weekly-reference-data.yml") == expected
+    # The dispatch "all" group must stay in lockstep with the registry so a
+    # manual full rebuild covers every supported market in the canonical order.
+    assert _static_site_market_group("ALL") == expected
+    assert _weekly_reference_matrix_markets(".github/workflows/weekly-reference-data.yml") == expected
+
+
+def test_static_site_schedule_groups_partition_supported_markets():
+    asia = _static_site_market_group("ASIA")
+    us = _static_site_market_group("US")
+    all_markets = _static_site_market_group("ALL")
+
+    # The two scheduled groups must contain the intended exact markets...
+    assert asia == ["HK", "IN", "JP", "KR", "TW", "CN", "SG", "MY", "AU"]
+    assert us == ["US", "CA", "DE"]
+
+    # ...and together partition the full market set (disjoint + exhaustive), so
+    # every supported market is published by exactly one scheduled run.
+    assert set(asia).isdisjoint(us)
+    assert set(asia) | set(us) == set(all_markets)
+    assert set(all_markets) == set(market_registry.supported_market_codes())
 
 
 def test_static_workflow_legacy_weekly_reference_manifest_is_us_only():

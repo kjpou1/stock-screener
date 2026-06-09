@@ -142,6 +142,15 @@ const DEFAULT_SUPPORTED_MARKETS = DEFAULT_MARKET_CATALOG.markets
   .map((market) => market.code)
   .filter(Boolean);
 
+export const DEFAULT_BOOTSTRAP_STAGES = [
+  { key: 'universe', label: 'Universe Refresh' },
+  { key: 'prices', label: 'Price Refresh' },
+  { key: 'fundamentals', label: 'Fundamentals Refresh' },
+  { key: 'breadth', label: 'Breadth Calculation' },
+  { key: 'groups', label: 'Group Rankings' },
+  { key: 'scan', label: 'Scan' },
+];
+
 export const DEFAULT_CAPABILITIES = {
   features: {
     themes: true,
@@ -167,6 +176,7 @@ export const DEFAULT_CAPABILITIES = {
   primary_market: 'US',
   enabled_markets: ['US'],
   bootstrap_state: 'not_started',
+  bootstrap_stages: DEFAULT_BOOTSTRAP_STAGES,
   market_catalog: DEFAULT_MARKET_CATALOG,
   supported_markets: DEFAULT_SUPPORTED_MARKETS,
   universe_options: null,
@@ -179,12 +189,26 @@ const BOOTSTRAP_BACKGROUND_WARNING = (
   + 'Additional enabled markets keep syncing after the app becomes usable.'
 );
 
-function buildBootstrapSeed(primaryMarket, enabledMarkets, taskId) {
+function normalizeBootstrapStages(stages) {
+  if (!Array.isArray(stages) || stages.length === 0) {
+    return DEFAULT_BOOTSTRAP_STAGES;
+  }
+  const normalized = stages
+    .map((stage) => ({
+      key: stage?.key,
+      label: stage?.label || stage?.key,
+    }))
+    .filter((stage) => stage.key && stage.label);
+  return normalized.length > 0 ? normalized : DEFAULT_BOOTSTRAP_STAGES;
+}
+
+function buildBootstrapSeed(primaryMarket, enabledMarkets, taskId, stages) {
+  const [firstStage] = normalizeBootstrapStages(stages);
   return enabledMarkets.map((market) => ({
     market,
     lifecycle: 'bootstrap',
-    stage_key: 'universe',
-    stage_label: 'Universe Refresh',
+    stage_key: firstStage.key,
+    stage_label: firstStage.label,
     status: 'queued',
     progress_mode: 'indeterminate',
     percent: null,
@@ -214,6 +238,9 @@ export function mergeBootstrapCapabilities(previous, data) {
     primary_market: data.primary_market ?? previous?.primary_market ?? 'US',
     enabled_markets: data.enabled_markets ?? previous?.enabled_markets ?? ['US'],
     bootstrap_state: data.bootstrap_state ?? 'running',
+    bootstrap_stages: normalizeBootstrapStages(
+      data.bootstrap_stages ?? previous?.bootstrap_stages
+    ),
     market_catalog: data.market_catalog
       ?? previous?.market_catalog
       ?? DEFAULT_CAPABILITIES.market_catalog,
@@ -281,6 +308,8 @@ export function RuntimeProvider({ children }) {
       queryClient.setQueryData(['runtimeActivity'], (previous) => {
         const primaryMarket = data.primary_market ?? 'US';
         const enabledMarkets = data.enabled_markets ?? [primaryMarket];
+        const bootstrapStages = normalizeBootstrapStages(data.bootstrap_stages);
+        const [firstStage] = bootstrapStages;
         return {
           ...(previous ?? DEFAULT_RUNTIME_ACTIVITY),
           bootstrap: {
@@ -289,10 +318,11 @@ export function RuntimeProvider({ children }) {
             app_ready: !data.bootstrap_required,
             primary_market: primaryMarket,
             enabled_markets: enabledMarkets,
-            current_stage: 'Universe Refresh',
+            current_stage: firstStage.label,
             progress_mode: 'indeterminate',
             percent: null,
             message: 'Bootstrap queued.',
+            stages: bootstrapStages,
             background_warning: enabledMarkets.length > 1
               ? BOOTSTRAP_BACKGROUND_WARNING
               : null,
@@ -302,7 +332,12 @@ export function RuntimeProvider({ children }) {
             active_markets: enabledMarkets,
             status: 'active',
           },
-          markets: buildBootstrapSeed(primaryMarket, enabledMarkets, data.task_id),
+          markets: buildBootstrapSeed(
+            primaryMarket,
+            enabledMarkets,
+            data.task_id,
+            bootstrapStages
+          ),
         };
       });
       queryClient.invalidateQueries({ queryKey: ['appCapabilities'] });

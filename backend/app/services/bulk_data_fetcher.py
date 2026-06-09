@@ -20,6 +20,12 @@ import time
 
 from ..config import settings
 from .growth_cadence_service import compute_cadence_aware_growth
+from .price_fetch_failures import (
+    classify_price_fetch_error,
+    is_no_data_price_failure,
+    is_rate_limit_error,
+    normalize_price_fetch_failure_kind,
+)
 
 if TYPE_CHECKING:
     from .eps_rating_service import EPSRatingService
@@ -116,8 +122,13 @@ class BulkDataFetcher:
         return EPSRatingService()
 
     @staticmethod
-    def _build_error_result(symbol: str, error: str) -> Dict[str, Any]:
-        return {
+    def _build_error_result(
+        symbol: str,
+        error: str,
+        *,
+        error_kind: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        result = {
             'symbol': symbol,
             'price_data': None,
             'info': None,
@@ -125,11 +136,34 @@ class BulkDataFetcher:
             'has_error': True,
             'error': error,
         }
+        if error_kind:
+            result["error_kind"] = error_kind
+        return result
 
     @staticmethod
     def _is_rate_limit_error(error: str) -> bool:
-        lower = (error or "").lower()
-        return any(indicator in lower for indicator in ("rate", "429", "too many", "limit", "throttl"))
+        return is_rate_limit_error(error)
+
+    @staticmethod
+    def _is_permanent_missing_price_error(error: str) -> bool:
+        return is_no_data_price_failure(error)
+
+    @staticmethod
+    def _price_error_kind(error: str) -> Optional[str]:
+        kind = classify_price_fetch_error(error)
+        return kind.value if kind is not None else None
+
+    @staticmethod
+    def _yfinance_download_errors(symbols: List[str]) -> Dict[str, str]:
+        shared = getattr(yf, "shared", None)
+        errors = getattr(shared, "_ERRORS", None)
+        if not isinstance(errors, dict):
+            return {}
+        return {
+            symbol: str(errors[symbol])
+            for symbol in symbols
+            if symbol in errors and errors[symbol]
+        }
 
     def _transient_failure_rate(self, results: Dict[str, Dict[str, Any]]) -> float:
         if not results:
@@ -140,7 +174,16 @@ class BulkDataFetcher:
             if not data.get("has_error"):
                 continue
             error = data.get("error", "")
-            if self._is_rate_limit_error(error) or "empty" in error.lower():
+            error_kind = normalize_price_fetch_failure_kind(data.get("error_kind"))
+            if error_kind is not None and error_kind.value == "no_price_data":
+                continue
+            if error_kind is None and self._is_permanent_missing_price_error(error):
+                continue
+            if (
+                (error_kind is not None and error_kind.value in {"rate_limit", "transient"})
+                or self._is_rate_limit_error(error)
+                or "empty" in error.lower()
+            ):
                 transient_failures += 1
         return transient_failures / len(results)
 
@@ -459,11 +502,17 @@ class BulkDataFetcher:
             if session is not None:
                 download_kwargs["session"] = session
             raw = yf.download(**download_kwargs)
+            download_errors = self._yfinance_download_errors(symbols)
 
             if raw is None or raw.empty:
                 logger.warning("yf.download returned empty DataFrame")
                 for symbol in symbols:
-                    results[symbol] = self._build_error_result(symbol, 'yf.download returned empty')
+                    error = download_errors.get(symbol) or 'yf.download returned empty'
+                    results[symbol] = self._build_error_result(
+                        symbol,
+                        error,
+                        error_kind=self._price_error_kind(error),
+                    )
                 return results
 
             # Single symbol: yf.download returns flat columns (Open, High, etc.)
@@ -477,7 +526,12 @@ class BulkDataFetcher:
                         'fundamentals': None, 'has_error': False, 'error': None
                     }
                 else:
-                    results[symbol] = self._build_error_result(symbol, 'No data returned')
+                    error = download_errors.get(symbol) or 'No data returned'
+                    results[symbol] = self._build_error_result(
+                        symbol,
+                        error,
+                        error_kind=self._price_error_kind(error),
+                    )
             else:
                 # Multi-symbol: split by ticker
                 for symbol in symbols:
@@ -492,12 +546,27 @@ class BulkDataFetcher:
                                     'fundamentals': None, 'has_error': False, 'error': None
                                 }
                             else:
-                                results[symbol] = self._build_error_result(symbol, 'No data after filtering NaN rows')
+                                error = download_errors.get(symbol) or 'No data after filtering NaN rows'
+                                results[symbol] = self._build_error_result(
+                                    symbol,
+                                    error,
+                                    error_kind=self._price_error_kind(error),
+                                )
                         else:
-                            results[symbol] = self._build_error_result(symbol, 'Symbol not in download results')
+                            error = download_errors.get(symbol) or 'Symbol not in download results'
+                            results[symbol] = self._build_error_result(
+                                symbol,
+                                error,
+                                error_kind=self._price_error_kind(error),
+                            )
                     except Exception as e:
                         logger.warning(f"Error extracting {symbol} from download: {e}")
-                        results[symbol] = self._build_error_result(symbol, str(e))
+                        error = str(e)
+                        results[symbol] = self._build_error_result(
+                            symbol,
+                            error,
+                            error_kind=self._price_error_kind(error),
+                        )
 
             success = len([r for r in results.values() if not r['has_error']])
             failed = len(results) - success
@@ -506,14 +575,24 @@ class BulkDataFetcher:
             # Add missing symbols as errors
             for symbol in symbols:
                 if symbol not in results:
-                    results[symbol] = self._build_error_result(symbol, 'Missing from results')
+                    error = download_errors.get(symbol) or 'Missing from results'
+                    results[symbol] = self._build_error_result(
+                        symbol,
+                        error,
+                        error_kind=self._price_error_kind(error),
+                    )
 
             return results
 
         except Exception as e:
             logger.error(f"yf.download batch failed: {e}", exc_info=True)
+            error = f"Batch download error: {str(e)}"
             return {
-                symbol: self._build_error_result(symbol, f"Batch download error: {str(e)}")
+                symbol: self._build_error_result(
+                    symbol,
+                    error,
+                    error_kind=self._price_error_kind(error),
+                )
                 for symbol in symbols
             }
 

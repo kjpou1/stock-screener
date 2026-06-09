@@ -12,12 +12,14 @@ import { filterGroups } from './rrgTrace';
  */
 export function useRRGFilters(groups, { scope, market } = {}) {
   const [selected, setSelected] = useState([]);
+  const [selectedQuadrants, setSelectedQuadrants] = useState([]);
   const [rankRange, setRankRange] = useState(null);
 
   // Reset when the dataset identity changes (scope/market switch), since the
   // option names and rank extent no longer apply.
   useEffect(() => {
     setSelected([]);
+    setSelectedQuadrants([]);
     setRankRange(null);
   }, [scope, market]);
 
@@ -35,12 +37,25 @@ export function useRRGFilters(groups, { scope, market } = {}) {
   const rankActive = rankLo > 1 || rankHi < maxRank;
 
   const shown = useMemo(
-    () => filterGroups(groups, { names: selected, rankRange: rankActive ? [rankLo, rankHi] : null }),
-    [groups, selected, rankActive, rankLo, rankHi],
+    () => filterGroups(groups, {
+      names: selected,
+      quadrants: selectedQuadrants,
+      rankRange: rankActive ? [rankLo, rankHi] : null,
+    }),
+    [groups, selected, selectedQuadrants, rankActive, rankLo, rankHi],
   );
 
   return {
     shown,
-    filter: { names, selected, setSelected, maxRank, rankValue, setRankRange },
+    filter: {
+      names,
+      selected,
+      setSelected,
+      quadrants: selectedQuadrants,
+      setQuadrants: setSelectedQuadrants,
+      maxRank,
+      rankValue,
+      setRankRange,
+    },
   };
 }

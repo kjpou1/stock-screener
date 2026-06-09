@@ -17,7 +17,7 @@
  * component is purely presentational. It is shared by the live Group Rankings
  * page and the static-site Groups page — both pass the same `{ groups: [...] }`.
  */
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ScatterChart,
   Scatter,
@@ -39,6 +39,8 @@ import {
   Typography,
   CircularProgress,
   Alert,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import { QUADRANT_COLORS, QUADRANT_FILLS, quadrantColor } from './rrgColors';
 import { buildTailPoints } from './rrgTrace';
@@ -127,6 +129,42 @@ const TailArrows = ({ shown, perSegment, xAxisMap, yAxisMap }) => {
   return <g>{arrows}</g>;
 };
 
+/** Recharts <Customized> child: draws the group/sector name next to each current
+ *  head dot, tinted by quadrant. Uses the axis scales like TailArrows, and
+ *  degrades to nothing if scales aren't ready (e.g. SSR/jsdom). */
+const GroupLabels = ({ shown, xAxisMap, yAxisMap }) => {
+  const xAxis = xAxisMap && xAxisMap[Object.keys(xAxisMap)[0]];
+  const yAxis = yAxisMap && yAxisMap[Object.keys(yAxisMap)[0]];
+  const xScale = xAxis?.scale;
+  const yScale = yAxis?.scale;
+  if (typeof xScale !== 'function' || typeof yScale !== 'function') return null;
+
+  return (
+    <g>
+      {shown.map((g) => {
+        const cur = g.current;
+        if (!cur) return null;
+        const cx = xScale(cur.x);
+        const cy = yScale(cur.y);
+        if ([cx, cy].some((v) => v == null || Number.isNaN(v))) return null;
+        return (
+          <text
+            key={`label-${g.industry_group}`}
+            x={cx + 7}
+            y={cy - 7}
+            fontSize={10}
+            fontWeight={600}
+            fill={quadrantColor(g.quadrant)}
+            pointerEvents="none"
+          >
+            {g.industry_group}
+          </text>
+        );
+      })}
+    </g>
+  );
+};
+
 const RRGTooltip = ({ active, payload }) => {
   if (!active || !payload || !payload.length) return null;
   const g = payload[0]?.payload;
@@ -176,6 +214,10 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
   const scopeLabel = data?.scope === 'sectors' ? 'Sectors' : 'Groups';
 
   const { shown, filter } = useRRGFilters(groups, { scope: data?.scope, market: data?.market });
+
+  // Display preference (not a filter) — kept local so it persists across
+  // scope/market switches, unlike the filters in useRRGFilters.
+  const [showLabels, setShowLabels] = useState(false);
 
   const bound = useMemo(() => computeBound(shown), [shown]);
   const lo = 100 - bound;
@@ -238,11 +280,24 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
             {asOf ? ` · ${asOf}` : ''}
           </Typography>
           <Box sx={{ flexGrow: 1 }} />
+          <FormControlLabel
+            control={
+              <Switch
+                size="small"
+                checked={showLabels}
+                onChange={(e) => setShowLabels(e.target.checked)}
+              />
+            }
+            label="Labels"
+            sx={{ mr: 0 }}
+          />
           <RRGFilters
             scopeLabel={scopeLabel}
             names={filter.names}
             selected={filter.selected}
             onSelected={filter.setSelected}
+            quadrants={filter.quadrants}
+            onQuadrants={filter.setQuadrants}
             maxRank={filter.maxRank}
             rankValue={filter.rankValue}
             onRankChange={filter.setRankRange}
@@ -308,6 +363,13 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
                   <TailArrows shown={shown} perSegment={detailed} {...props} />
                 )}
               />
+
+              {/* Group/sector name labels next to each head dot (toggle). */}
+              {showLabels && (
+                <Customized
+                  component={(props) => <GroupLabels shown={shown} {...props} />}
+                />
+              )}
 
               {/* Current head dots — sized by constituents, colored by quadrant, clickable. */}
               <Scatter

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, fireEvent } from '@testing-library/react';
 import { renderWithProviders } from '../../test/renderWithProviders';
 import RRGChart from './RRGChart';
 import { QUADRANT_COLORS } from './rrgColors';
@@ -55,6 +55,21 @@ describe('RRGChart', () => {
     renderWithProviders(<RRGChart data={sampleData} />);
     expect(screen.getByText(/Rank 1/)).toBeInTheDocument();
     expect(screen.getAllByRole('slider')).toHaveLength(2);
+  });
+
+  it('renders a multi-select quadrant filter (one toggle per quadrant)', () => {
+    renderWithProviders(<RRGChart data={sampleData} />);
+    ['Improving', 'Leading', 'Weakening', 'Lagging'].forEach((q) => {
+      expect(screen.getByRole('button', { name: q })).toBeInTheDocument();
+    });
+  });
+
+  it('renders a Labels toggle that starts off and can be turned on', () => {
+    renderWithProviders(<RRGChart data={sampleData} />);
+    const toggle = screen.getByRole('checkbox', { name: /labels/i });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
   });
 
   it('renders a scope-aware filter control', () => {
