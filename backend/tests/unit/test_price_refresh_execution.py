@@ -92,3 +92,61 @@ def test_iter_price_refresh_batches_marks_unreturned_symbols_failed():
     assert summary.failed == 1
     assert summary.failed_symbols == ["B"]
     assert summary.failed_by_market == Counter({"US": 1})
+
+
+def test_price_refresh_execution_summary_accumulates_batches_incrementally():
+    from app.services.price_refresh_execution import (
+        PriceRefreshBatchOutcome,
+        PriceRefreshExecutionAccumulator,
+    )
+    from app.services.price_refresh_planning import PriceRefreshJob, PriceRefreshJobKind
+
+    stale_job = PriceRefreshJob(
+        kind=PriceRefreshJobKind.STALE,
+        symbols=("A", "B"),
+        period="7d",
+    )
+    missing_history_job = PriceRefreshJob(
+        kind=PriceRefreshJobKind.NO_HISTORY,
+        symbols=("C",),
+        period="2y",
+    )
+    accumulator = PriceRefreshExecutionAccumulator()
+
+    accumulator.add(
+        PriceRefreshBatchOutcome(
+            batch_number=1,
+            total_batches=2,
+            job=stale_job,
+            symbols=("A", "B"),
+            price_data_by_symbol={"A": object()},
+            successes=("A",),
+            failures=("B",),
+            failure_details={"B": "No data returned"},
+            refreshed_by_market=Counter({"US": 1}),
+            failed_by_market=Counter({"US": 1}),
+        )
+    )
+    accumulator.add(
+        PriceRefreshBatchOutcome(
+            batch_number=2,
+            total_batches=2,
+            job=missing_history_job,
+            symbols=("C",),
+            price_data_by_symbol={"C": object()},
+            successes=("C",),
+            failures=(),
+            failure_details={},
+            refreshed_by_market=Counter({"HK": 1}),
+            failed_by_market=Counter(),
+        )
+    )
+
+    summary = accumulator.summary()
+
+    assert summary.processed == 3
+    assert summary.refreshed == 2
+    assert summary.failed == 1
+    assert summary.failed_symbols == ["B"]
+    assert summary.refreshed_by_market == Counter({"US": 1, "HK": 1})
+    assert summary.failed_by_market == Counter({"US": 1})

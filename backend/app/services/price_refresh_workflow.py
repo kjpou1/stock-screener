@@ -22,6 +22,7 @@ from ..services.price_refresh_live_runner import (
     LivePriceRefreshRunner,
     PriceRefreshRetryScheduler,
 )
+from ..services.price_refresh_execution import PriceRefreshExecutionSummary
 from ..services.price_refresh_planning import (
     GitHubSeedOutcome,
     LIVE_TOP_UP_MODES,
@@ -80,6 +81,11 @@ class PriceRefreshProgressState:
     processed: int = 0
     failed: int = 0
     total: int = 0
+
+    def update_from_summary(self, summary: PriceRefreshExecutionSummary) -> None:
+        self.refreshed = summary.refreshed
+        self.processed = summary.processed
+        self.failed = summary.failed
 
 
 class PriceRefreshWorkflow:
@@ -464,6 +470,7 @@ class PriceRefreshWorkflow:
             activity_lifecycle=activity_lifecycle,
             symbol_markets=preparation.symbol_markets,
             activity_reporter=self._deps.activity_reporter,
+            progress_recorder=progress.update_from_summary,
         )
         progress.processed = execution_result.processed
         progress.refreshed = execution_result.refreshed

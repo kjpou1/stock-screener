@@ -50,6 +50,34 @@ class PriceRefreshExecutionSummary:
     processed: int = 0
 
 
+@dataclass
+class PriceRefreshExecutionAccumulator:
+    refreshed: int = 0
+    failed: int = 0
+    processed: int = 0
+    failed_symbols: list[str] = field(default_factory=list)
+    refreshed_by_market: Counter[str] = field(default_factory=Counter)
+    failed_by_market: Counter[str] = field(default_factory=Counter)
+
+    def add(self, batch: PriceRefreshBatchOutcome) -> None:
+        self.processed += len(batch.symbols)
+        self.refreshed += batch.refreshed
+        self.failed += batch.failed
+        self.failed_symbols.extend(batch.failures)
+        self.refreshed_by_market.update(batch.refreshed_by_market)
+        self.failed_by_market.update(batch.failed_by_market)
+
+    def summary(self) -> PriceRefreshExecutionSummary:
+        return PriceRefreshExecutionSummary(
+            refreshed=self.refreshed,
+            failed=self.failed,
+            failed_symbols=list(self.failed_symbols),
+            refreshed_by_market=Counter(self.refreshed_by_market),
+            failed_by_market=Counter(self.failed_by_market),
+            processed=self.processed,
+        )
+
+
 def _total_batches(jobs: Sequence[PriceRefreshJob], batch_size: int) -> int:
     return sum(
         (len(job.symbols) + batch_size - 1) // batch_size
@@ -225,25 +253,7 @@ def iter_price_refresh_batches(
 def summarize_price_refresh_batches(
     batches: Sequence[PriceRefreshBatchOutcome],
 ) -> PriceRefreshExecutionSummary:
-    refreshed_by_market: Counter[str] = Counter()
-    failed_by_market: Counter[str] = Counter()
-    failed_symbols: list[str] = []
-    refreshed = 0
-    failed = 0
-    processed = 0
+    accumulator = PriceRefreshExecutionAccumulator()
     for batch in batches:
-        processed += len(batch.symbols)
-        refreshed += batch.refreshed
-        failed += batch.failed
-        failed_symbols.extend(batch.failures)
-        refreshed_by_market.update(batch.refreshed_by_market)
-        failed_by_market.update(batch.failed_by_market)
-
-    return PriceRefreshExecutionSummary(
-        refreshed=refreshed,
-        failed=failed,
-        failed_symbols=failed_symbols,
-        refreshed_by_market=refreshed_by_market,
-        failed_by_market=failed_by_market,
-        processed=processed,
-    )
+        accumulator.add(batch)
+    return accumulator.summary()

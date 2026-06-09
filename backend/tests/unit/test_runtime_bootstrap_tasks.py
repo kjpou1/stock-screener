@@ -338,6 +338,30 @@ def test_queue_local_runtime_bootstrap_records_partial_manifest_when_background_
     ]
 
 
+def test_queue_local_runtime_bootstrap_surfaces_manifest_recording_failure(monkeypatch):
+    from app.tasks import runtime_bootstrap_tasks as module
+
+    class _FakeAsyncResult:
+        def __init__(self, task_id: str) -> None:
+            self.id = task_id
+
+    def _queue(market_plan, **_kwargs):
+        return _FakeAsyncResult(f"task-{market_plan.market.lower()}")
+
+    monkeypatch.setattr(module, "_queue_market_bootstrap_workflow", _queue)
+    monkeypatch.setattr(
+        module,
+        "record_runtime_bootstrap_run",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("manifest write failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="manifest write failed"):
+        module.queue_local_runtime_bootstrap(
+            primary_market="US",
+            enabled_markets=["US", "HK"],
+        )
+
+
 def test_apply_bootstrap_workflow_does_not_retry_without_errback_on_type_error():
     from app.tasks import runtime_bootstrap_tasks as module
 

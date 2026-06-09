@@ -14,41 +14,18 @@ from ..services.bootstrap_run_manifest import (
     BootstrapRunManifest,
     BootstrapRunManifestRepository,
 )
+from ..services.runtime_activity_contract import (
+    RuntimeActivityRecord,
+    progress_mode,
+    resolve_progress_percent,
+    stage_index,
+)
 from ..services.runtime_activity_presenter import build_runtime_activity_status
 from ..services.runtime_preferences_service import get_runtime_bootstrap_status
 from ..wiring.bootstrap import get_data_fetch_lock
 
 RUNTIME_ACTIVITY_CATEGORY = "runtime_activity"
 MARKET_ACTIVITY_KEY_PREFIX = "runtime.activity.market."
-
-STAGE_SEQUENCE = (
-    "universe",
-    "prices",
-    "fundamentals",
-    "breadth",
-    "groups",
-    "scan",
-)
-
-STAGE_LABELS = {
-    "universe": "Universe Refresh",
-    "prices": "Price Refresh",
-    "fundamentals": "Fundamentals Refresh",
-    "breadth": "Breadth Calculation",
-    "groups": "Group Rankings",
-    "snapshot": "Feature Snapshot",
-    "scan": "Scan",
-}
-
-DEFAULT_LIFECYCLE_BY_STAGE = {
-    "universe": "weekly_refresh",
-    "prices": "daily_refresh",
-    "fundamentals": "weekly_refresh",
-    "breadth": "daily_refresh",
-    "groups": "daily_refresh",
-    "snapshot": "daily_refresh",
-    "scan": "daily_refresh",
-}
 
 _OPTIONAL_FAILURE_SCAN_SUPERSEDE_STAGES = frozenset({"groups"})
 
@@ -59,18 +36,6 @@ def _utcnow_iso() -> str:
 
 def _activity_key(market: str) -> str:
     return f"{MARKET_ACTIVITY_KEY_PREFIX}{str(market).upper()}"
-
-
-def _stage_label(stage_key: str | None) -> str | None:
-    if stage_key is None:
-        return None
-    return STAGE_LABELS.get(stage_key, str(stage_key).replace("_", " ").title())
-
-
-def _default_lifecycle(stage_key: str | None) -> str:
-    if stage_key is None:
-        return "daily_refresh"
-    return DEFAULT_LIFECYCLE_BY_STAGE.get(stage_key, "daily_refresh")
 
 
 def _get_setting(db: Session, key: str) -> AppSetting | None:
@@ -146,7 +111,7 @@ def _should_supersede_failed_activity(
         return False
     if payload.get("lifecycle") != "bootstrap":
         return False
-    return _stage_index(payload.get("stage_key")) > _stage_index(existing_payload.get("stage_key"))
+    return stage_index(payload.get("stage_key")) > stage_index(existing_payload.get("stage_key"))
 
 
 def _save_market_activity(
@@ -193,8 +158,8 @@ def _save_market_activity(
                 )
                 incoming_new_cycle = payload_status in {"queued", "running"} and not same_owner
                 if incoming_new_cycle:
-                    existing_stage_index = _stage_index(existing_payload.get("stage_key"))
-                    payload_stage_index = _stage_index(payload.get("stage_key"))
+                    existing_stage_index = stage_index(existing_payload.get("stage_key"))
+                    payload_stage_index = stage_index(payload.get("stage_key"))
                     lifecycle_changed = existing_payload.get("lifecycle") != payload.get("lifecycle")
                     incoming_new_cycle = lifecycle_changed or payload_stage_index <= existing_stage_index
                 if supersedes_failed_activity:
@@ -221,35 +186,6 @@ def _save_market_activity(
     return payload
 
 
-def _resolve_progress_percent(
-    percent: float | None,
-    current: int | None,
-    total: int | None,
-) -> float | None:
-    if percent is not None:
-        return float(percent)
-    if current is None or total in (None, 0):
-        return None
-    return round((float(current) / float(total)) * 100.0, 1)
-
-
-def _progress_mode(
-    status: str | None,
-    percent: float | None,
-    current: int | None = None,
-    total: int | None = None,
-) -> str:
-    if _resolve_progress_percent(percent, current, total) is not None or status in {"completed", "idle"}:
-        return "determinate"
-    return "indeterminate"
-
-
-def _stage_index(stage_key: str | None) -> int:
-    if stage_key in STAGE_SEQUENCE:
-        return STAGE_SEQUENCE.index(stage_key)
-    return len(STAGE_SEQUENCE)
-
-
 def _activity_payload(
     *,
     market: str,
@@ -263,33 +199,19 @@ def _activity_payload(
     total: int | None = None,
     message: str | None = None,
 ) -> dict[str, Any]:
-    stage_label = _stage_label(stage_key)
-    resolved_lifecycle = lifecycle or _default_lifecycle(stage_key)
-    resolved_message = message
-    resolved_percent = _resolve_progress_percent(percent, current, total)
-    if not resolved_message and stage_label:
-        action = {
-            "queued": "Queued",
-            "running": "Running",
-            "completed": "Completed",
-            "failed": "Failed",
-        }.get(status, "Updated")
-        resolved_message = f"{action} {stage_label.lower()}"
-    return {
-        "market": str(market).upper(),
-        "lifecycle": resolved_lifecycle,
-        "stage_key": stage_key,
-        "stage_label": stage_label,
-        "status": status,
-        "progress_mode": _progress_mode(status, resolved_percent, current, total),
-        "percent": resolved_percent,
-        "current": current,
-        "total": total,
-        "message": resolved_message,
-        "task_name": task_name,
-        "task_id": task_id,
-        "updated_at": _utcnow_iso(),
-    }
+    return RuntimeActivityRecord.create(
+        market=market,
+        stage_key=stage_key,
+        lifecycle=lifecycle,
+        status=status,
+        task_name=task_name,
+        task_id=task_id,
+        percent=percent,
+        current=current,
+        total=total,
+        message=message,
+        updated_at=_utcnow_iso(),
+    ).to_payload()
 
 
 def mark_market_activity_queued(
@@ -514,12 +436,12 @@ def _overlay_live_progress(record: dict[str, Any], market: str) -> dict[str, Any
         merged["total"] = current_task["total"]
     if current_task.get("last_heartbeat") is not None:
         merged["updated_at"] = current_task["last_heartbeat"]
-    merged["percent"] = _resolve_progress_percent(
+    merged["percent"] = resolve_progress_percent(
         merged.get("percent"),
         merged.get("current"),
         merged.get("total"),
     )
-    merged["progress_mode"] = _progress_mode(
+    merged["progress_mode"] = progress_mode(
         merged.get("status"),
         merged.get("percent"),
         merged.get("current"),
@@ -534,49 +456,34 @@ def _queued_bootstrap_market_payload(
     *,
     task_id: str | None = None,
 ) -> dict[str, Any]:
-    return {
-        "market": str(market).upper(),
-        "lifecycle": "bootstrap",
-        "stage_key": "universe",
-        "stage_label": _stage_label("universe"),
-        "status": "queued",
-        "progress_mode": "indeterminate",
-        "percent": None,
-        "current": None,
-        "total": None,
-        "message": "Bootstrap queued.",
-        "task_name": None,
-        "task_id": task_id,
-        "updated_at": None,
-    }
+    return RuntimeActivityRecord.create(
+        market=market,
+        lifecycle="bootstrap",
+        stage_key="universe",
+        status="queued",
+        message="Bootstrap queued.",
+        task_id=task_id,
+    ).to_payload()
 
 
 def _idle_market_payload(market: str, record: dict[str, Any] | None) -> dict[str, Any]:
     if record is None:
-        return {
-            "market": str(market).upper(),
-            "lifecycle": "idle",
-            "stage_key": None,
-            "stage_label": None,
-            "status": "idle",
-            "progress_mode": "determinate",
-            "percent": None,
-            "current": None,
-            "total": None,
-            "message": "Idle",
-            "task_name": None,
-            "task_id": None,
-            "updated_at": None,
-        }
+        return RuntimeActivityRecord.create(
+            market=market,
+            lifecycle="idle",
+            stage_key=None,
+            status="idle",
+            message="Idle",
+        ).to_payload()
     payload = dict(record)
     if payload.get("status") == "completed":
         payload["lifecycle"] = "idle"
-    payload["percent"] = _resolve_progress_percent(
+    payload["percent"] = resolve_progress_percent(
         payload.get("percent"),
         payload.get("current"),
         payload.get("total"),
     )
-    payload["progress_mode"] = _progress_mode(
+    payload["progress_mode"] = progress_mode(
         payload.get("status"),
         payload.get("percent"),
         payload.get("current"),

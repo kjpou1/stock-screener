@@ -4,40 +4,28 @@ from __future__ import annotations
 
 from typing import Any
 
-ACTIVE_STATUSES = {"queued", "running"}
-
-STAGE_SEQUENCE = (
-    "universe",
-    "prices",
-    "fundamentals",
-    "breadth",
-    "groups",
-    "scan",
+from .runtime_activity_contract import (
+    ACTIVE_ACTIVITY_STATUSES,
+    RUNTIME_STAGE_SEQUENCE,
+    RuntimeActivityRecord,
+    stage_index,
 )
 
 
-def _bootstrap_progress_percent(record: dict[str, Any] | None) -> float:
+def _bootstrap_progress_percent(record: RuntimeActivityRecord | None) -> float:
     if record is None:
         return 0.0
-    stage_key = record.get("stage_key")
-    if stage_key not in STAGE_SEQUENCE:
+    if record.stage_key not in RUNTIME_STAGE_SEQUENCE:
         return 0.0
-    stage_index = STAGE_SEQUENCE.index(stage_key)
-    raw_percent = record.get("percent")
+    current_stage_index = stage_index(record.stage_key)
+    raw_percent = record.percent
     if raw_percent is not None:
         stage_fraction = max(0.0, min(float(raw_percent), 100.0)) / 100.0
-    elif record.get("status") == "completed":
+    elif record.status == "completed":
         stage_fraction = 1.0
     else:
         stage_fraction = 0.0
-    return round(((stage_index + stage_fraction) / len(STAGE_SEQUENCE)) * 100.0, 2)
-
-
-def _is_active_bootstrap_payload(payload: dict[str, Any]) -> bool:
-    return (
-        payload.get("lifecycle") == "bootstrap"
-        and payload.get("status") in ACTIVE_STATUSES
-    )
+    return round(((current_stage_index + stage_fraction) / len(RUNTIME_STAGE_SEQUENCE)) * 100.0, 2)
 
 
 def build_runtime_activity_status(
@@ -48,73 +36,74 @@ def build_runtime_activity_status(
 ) -> dict[str, Any]:
     enabled_markets = list(bootstrap_status.enabled_markets)
     primary_market = bootstrap_status.primary_market
-    active_markets = [
-        payload["market"]
+    activity_records = [
+        RuntimeActivityRecord.from_payload(payload)
         for payload in market_payloads
-        if payload.get("status") in ACTIVE_STATUSES
     ]
-    has_failed = any(payload.get("status") == "failed" for payload in market_payloads)
+    active_markets = [
+        record.market
+        for record in activity_records
+        if record.status in ACTIVE_ACTIVITY_STATUSES
+    ]
+    has_failed = any(record.status == "failed" for record in activity_records)
     summary_status = "warning" if has_failed else ("active" if active_markets else "idle")
 
-    primary_payload = next(
-        (payload for payload in market_payloads if payload["market"] == primary_market),
+    primary_record = next(
+        (record for record in activity_records if record.market == primary_market),
         None,
     )
     secondary_active = [
-        payload["market"]
-        for payload in market_payloads
-        if payload["market"] != primary_market and _is_active_bootstrap_payload(payload)
+        record.market
+        for record in activity_records
+        if record.market != primary_market and record.active_bootstrap
     ]
-    secondary_active_payload = next(
+    secondary_active_record = next(
         (
-            payload
-            for payload in market_payloads
-            if payload["market"] != primary_market and _is_active_bootstrap_payload(payload)
+            record
+            for record in activity_records
+            if record.market != primary_market and record.active_bootstrap
         ),
         None,
     )
     bootstrap_current = None
     bootstrap_total = None
 
-    if bootstrap_status.bootstrap_state == "ready" and secondary_active_payload:
-        bootstrap_progress_mode = secondary_active_payload.get("progress_mode") or "indeterminate"
-        bootstrap_percent = secondary_active_payload.get("percent")
-        bootstrap_stage = secondary_active_payload.get("stage_label")
-        bootstrap_message = (
-            secondary_active_payload.get("message")
-            or "Additional market loading continues."
-        )
-        bootstrap_current = secondary_active_payload.get("current")
-        bootstrap_total = secondary_active_payload.get("total")
+    if bootstrap_status.bootstrap_state == "ready" and secondary_active_record:
+        bootstrap_progress_mode = secondary_active_record.progress_mode or "indeterminate"
+        bootstrap_percent = secondary_active_record.percent
+        bootstrap_stage = secondary_active_record.stage_label
+        bootstrap_message = secondary_active_record.message or "Additional market loading continues."
+        bootstrap_current = secondary_active_record.current
+        bootstrap_total = secondary_active_record.total
     elif bootstrap_status.bootstrap_state == "ready":
         bootstrap_progress_mode = "determinate"
         bootstrap_percent = 100.0
-        bootstrap_stage = primary_payload.get("stage_label") if primary_payload else None
+        bootstrap_stage = primary_record.stage_label if primary_record else None
         bootstrap_message = (
             "Primary market is ready."
             if not secondary_active
             else "Primary market is ready while additional market loading continues."
         )
-    elif any(payload.get("progress_mode") == "determinate" for payload in market_payloads):
-        focus_payload = next(
-            (payload for payload in market_payloads if payload.get("status") in ACTIVE_STATUSES),
-            primary_payload,
+    elif any(record.progress_mode == "determinate" for record in activity_records):
+        focus_record = next(
+            (record for record in activity_records if record.status in ACTIVE_ACTIVITY_STATUSES),
+            primary_record,
         )
         bootstrap_progress_mode = "determinate"
         bootstrap_percent = round(
-            sum(_bootstrap_progress_percent(payload) for payload in market_payloads)
-            / max(len(market_payloads), 1),
+            sum(_bootstrap_progress_percent(record) for record in activity_records)
+            / max(len(activity_records), 1),
             2,
         )
-        bootstrap_stage = focus_payload.get("stage_label") if focus_payload else None
-        bootstrap_message = focus_payload.get("message") if focus_payload else "Bootstrap queued."
+        bootstrap_stage = focus_record.stage_label if focus_record else None
+        bootstrap_message = focus_record.message if focus_record else "Bootstrap queued."
     else:
         bootstrap_progress_mode = "indeterminate"
         bootstrap_percent = None
-        bootstrap_stage = primary_payload.get("stage_label") if primary_payload else None
+        bootstrap_stage = primary_record.stage_label if primary_record else None
         bootstrap_message = (
-            primary_payload.get("message")
-            if primary_payload is not None
+            primary_record.message
+            if primary_record is not None
             else "Bootstrap queued."
         )
 

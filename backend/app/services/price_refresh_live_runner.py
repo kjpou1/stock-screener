@@ -9,9 +9,9 @@ from typing import Any
 from ..config import settings
 from .price_refresh_activity import CeleryTaskLike, PriceRefreshActivityReporter, task_id
 from .price_refresh_execution import (
+    PriceRefreshExecutionAccumulator,
     PriceRefreshExecutionSummary,
     iter_price_refresh_batches,
-    summarize_price_refresh_batches,
 )
 from .price_refresh_planning import PriceRefreshJob
 
@@ -44,11 +44,9 @@ class LivePriceRefreshRunner:
         activity_lifecycle: str,
         symbol_markets: Mapping[str, str],
         activity_reporter: PriceRefreshActivityReporter,
+        progress_recorder: Callable[[PriceRefreshExecutionSummary], None] | None = None,
     ) -> PriceRefreshExecutionSummary:
-        batches = []
-        processed = 0
-        refreshed = 0
-        failed = 0
+        accumulator = PriceRefreshExecutionAccumulator()
 
         def market_for_symbol(symbol: str) -> str:
             return symbol_markets.get(str(symbol).upper(), effective_market)
@@ -69,7 +67,6 @@ class LivePriceRefreshRunner:
             market_for_symbol=market_for_symbol,
             raise_if_transient_database_error=self._deps.raise_if_transient_database_error,
         ):
-            batches.append(batch)
             if batch.price_data_by_symbol:
                 price_cache.store_batch_in_cache(
                     dict(batch.price_data_by_symbol),
@@ -80,13 +77,14 @@ class LivePriceRefreshRunner:
                 list(batch.successes),
                 list(batch.failures),
                 db,
-                failure_details=dict(batch.failure_details),
-            )
+                    failure_details=dict(batch.failure_details),
+                )
 
-            processed += len(batch.symbols)
-            refreshed += batch.refreshed
-            failed += batch.failed
-            percent = (processed / total) * 100 if total else 100.0
+            accumulator.add(batch)
+            summary = accumulator.summary()
+            if progress_recorder is not None:
+                progress_recorder(summary)
+            percent = (summary.processed / total) * 100 if total else 100.0
             activity_reporter.publish_progress(
                 db,
                 price_cache,
@@ -94,26 +92,18 @@ class LivePriceRefreshRunner:
                 market=market,
                 effective_market=effective_market,
                 lifecycle=activity_lifecycle,
-                current=processed,
+                current=summary.processed,
                 total=total,
                 percent=percent,
                 message=f"Batch {batch.batch_number}/{batch.total_batches} · refreshing prices",
-                refreshed=refreshed,
-                failed=failed,
+                refreshed=summary.refreshed,
+                failed=summary.failed,
             )
             self._extend_lock(task, market=market)
-            if processed < total:
+            if summary.processed < total:
                 self._wait_between_batches(market)
 
-        summary = summarize_price_refresh_batches(batches)
-        return PriceRefreshExecutionSummary(
-            refreshed=summary.refreshed,
-            failed=summary.failed,
-            failed_symbols=summary.failed_symbols,
-            refreshed_by_market=summary.refreshed_by_market,
-            failed_by_market=summary.failed_by_market,
-            processed=processed,
-        )
+        return accumulator.summary()
 
     def _extend_lock(self, task: CeleryTaskLike, *, market: str | None) -> None:
         self._deps.data_fetch_lock_factory().extend_lock(

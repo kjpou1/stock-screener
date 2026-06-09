@@ -27,7 +27,6 @@ const STATUS_COLOR = {
   failed: 'error',
   idle: 'default',
 };
-const ACTIVE_MARKET_STATUSES = new Set(['running', 'queued']);
 
 function formatCount(value) {
   return new Intl.NumberFormat('en-US').format(value);
@@ -93,30 +92,9 @@ export default function BootstrapSetupScreen({
   const running = bootstrapState === 'running';
   const activityQuery = useRuntimeActivity({ enabled: running || isStartingBootstrap });
   const bootstrap = activityQuery.data?.bootstrap ?? null;
-  const marketActivity = useMemo(() => {
-    const markets = activityQuery.data?.markets ?? [];
-    const byMarket = new Map(markets.map((item) => [item.market, item]));
-    return normalizedSelection.map((market) => (
-      byMarket.get(market) ?? {
-        market,
-        lifecycle: running ? 'bootstrap' : 'idle',
-        stage_label: running ? 'Queued' : 'Idle',
-        status: running && market === (bootstrap?.primary_market || primaryMarket) ? 'running' : 'queued',
-        message: running ? 'Waiting for bootstrap task' : 'Idle',
-      }
-    ));
-  }, [activityQuery.data?.markets, bootstrap?.primary_market, normalizedSelection, primaryMarket, running]);
-  const primaryActivity = useMemo(
-    () => marketActivity.find((market) => market.market === (primaryMarket || selectedPrimary)) ?? marketActivity[0],
-    [marketActivity, primaryMarket, selectedPrimary]
-  );
-  const focusedActivity = useMemo(
-    () => (
-      marketActivity.find((market) => market.status === 'running')
-      ?? marketActivity.find((market) => ACTIVE_MARKET_STATUSES.has(market.status))
-      ?? primaryActivity
-    ),
-    [marketActivity, primaryActivity]
+  const marketActivity = useMemo(
+    () => activityQuery.data?.markets ?? [],
+    [activityQuery.data?.markets]
   );
   const bootstrapResolvedPercent = resolveDeterminatePercent(
     bootstrap?.percent,
@@ -125,7 +103,6 @@ export default function BootstrapSetupScreen({
   );
   const requestedBootstrapProgressMode = (
     bootstrap?.progress_mode
-    || focusedActivity?.progress_mode
     || 'indeterminate'
   );
   const bootstrapProgressMode = (
@@ -146,7 +123,7 @@ export default function BootstrapSetupScreen({
   )
     ? `${formatCount(bootstrap.current)} / ${formatCount(bootstrap.total)} stocks`
     : null;
-  const bootstrapMessage = bootstrap?.message || focusedActivity?.message || 'Preparing market data.';
+  const bootstrapMessage = bootstrap?.message || 'Preparing market data.';
 
   const toggleMarket = (market) => {
     if (market === selectedPrimary) {
@@ -225,7 +202,7 @@ export default function BootstrapSetupScreen({
                   <Stack spacing={1.5}>
                     <Stack direction="row" justifyContent="space-between" alignItems="center">
                       <Typography variant="subtitle2">
-                        {bootstrap?.current_stage || focusedActivity?.stage_label || 'Preparing bootstrap'}
+                        {bootstrap?.current_stage || 'Preparing bootstrap'}
                       </Typography>
                       {bootstrapProgressMode === 'determinate' && bootstrapPercent !== null && (
                         <Typography variant="body2" color="text.secondary">
@@ -253,44 +230,46 @@ export default function BootstrapSetupScreen({
                     {bootstrap.background_warning}
                   </Alert>
                 )}
-                <Box>
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                    Enabled market queue
-                  </Typography>
-                  <Stack spacing={1}>
-                    {marketActivity.map((market) => (
-                      <Box
-                        key={market.market}
-                        sx={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: 2,
-                          px: 1.5,
-                          py: 1,
-                          borderRadius: 1.5,
-                          border: 1,
-                          borderColor: 'divider',
-                        }}
-                      >
-                        <Box>
-                          <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                            {market.market}
-                            {market.market === (bootstrap?.primary_market || primaryMarket) ? ' (primary)' : ''}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            {market.stage_label || 'Queued'}{market.message ? ` · ${market.message}` : ''}
-                          </Typography>
+                {marketActivity.length > 0 && (
+                  <Box>
+                    <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                      Enabled market queue
+                    </Typography>
+                    <Stack spacing={1}>
+                      {marketActivity.map((market) => (
+                        <Box
+                          key={market.market}
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 2,
+                            px: 1.5,
+                            py: 1,
+                            borderRadius: 1.5,
+                            border: 1,
+                            borderColor: 'divider',
+                          }}
+                        >
+                          <Box>
+                            <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                              {market.market}
+                              {market.market === (bootstrap?.primary_market || primaryMarket) ? ' (primary)' : ''}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {market.stage_label || 'Queued'}{market.message ? ` · ${market.message}` : ''}
+                            </Typography>
+                          </Box>
+                          <Chip
+                            size="small"
+                            color={STATUS_COLOR[market.status] || 'default'}
+                            label={market.status || 'idle'}
+                          />
                         </Box>
-                        <Chip
-                          size="small"
-                          color={STATUS_COLOR[market.status] || 'default'}
-                          label={market.status || 'idle'}
-                        />
-                      </Box>
-                    ))}
-                  </Stack>
-                </Box>
+                      ))}
+                    </Stack>
+                  </Box>
+                )}
               </Stack>
             )}
 

@@ -488,6 +488,37 @@ describe('BootstrapSetupScreen', () => {
     expect(screen.getAllByText(/Refreshing market prices/).length).toBeGreaterThan(0);
   });
 
+  it('does not synthesize queued market rows when runtime activity has no markets', () => {
+    useRuntimeActivityMock.mockReturnValue({
+      data: {
+        bootstrap: {
+          primary_market: 'US',
+          current_stage: 'Preparing bootstrap',
+          progress_mode: 'indeterminate',
+          percent: null,
+          message: 'Bootstrap queued.',
+          background_warning: null,
+        },
+        markets: [],
+      },
+    });
+
+    renderWithProviders(
+      <BootstrapSetupScreen
+        primaryMarket="US"
+        enabledMarkets={['US', 'HK']}
+        supportedMarkets={['US', 'HK', 'JP', 'TW']}
+        bootstrapState="running"
+        isStartingBootstrap={false}
+        bootstrapError={null}
+        onStartBootstrap={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByText('Enabled market queue')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Waiting for bootstrap task/)).not.toBeInTheDocument();
+  });
+
   it('renders Market Catalog labels while submitting Market codes', () => {
     useRuntimeActivityMock.mockReturnValue({ data: null });
     const onStartBootstrap = vi.fn().mockResolvedValue();

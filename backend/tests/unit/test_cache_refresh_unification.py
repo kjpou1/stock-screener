@@ -407,6 +407,93 @@ def test_smart_refresh_cache_publishes_running_progress_per_batch(monkeypatch):
     assert progress_updates[-1]["percent"] == pytest.approx(100.0)
 
 
+def test_smart_refresh_cache_failure_records_latest_batch_progress(monkeypatch):
+    import app.tasks.cache_tasks as module
+
+    fake_db = MagicMock()
+    symbols = [SimpleNamespace(symbol=f"SYM{i}") for i in range(101)]
+    fake_query = MagicMock()
+    fake_query.filter.return_value.filter.return_value.order_by.return_value.all.return_value = symbols
+    fake_query.filter.return_value.order_by.return_value.all.return_value = symbols
+    fake_db.query.return_value = fake_query
+
+    fake_price_cache = MagicMock()
+    fake_lock = MagicMock()
+    bulk_fetcher = MagicMock()
+    progress_updates: list[dict] = []
+    failures: list[dict] = []
+    fetch_calls = 0
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    monkeypatch.setattr(module, "warm_spy_cache", MagicMock(return_value={"status": "ok"}))
+    monkeypatch.setattr(
+        module,
+        "get_eastern_now",
+        lambda: SimpleNamespace(weekday=lambda: 1, hour=17, date=lambda: date(2026, 3, 24)),
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_price_cache",
+        lambda: fake_price_cache,
+    )
+    monkeypatch.setattr(
+        module,
+        "get_daily_price_bundle_service",
+        lambda: SimpleNamespace(sync_from_github=lambda *_args, **_kwargs: {"status": "missing"}),
+    )
+    monkeypatch.setattr(
+        "app.services.bulk_data_fetcher.BulkDataFetcher",
+        lambda: bulk_fetcher,
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_data_fetch_lock",
+        lambda: fake_lock,
+    )
+    monkeypatch.setattr(
+        "app.wiring.bootstrap.get_rate_limiter",
+        lambda: SimpleNamespace(wait_for_market=lambda *args, **kwargs: None, wait=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(module, "_track_symbol_failures", lambda *args, **kwargs: None)
+
+    def _fetch_with_backoff(_fetcher, batch_symbols, **kwargs):
+        nonlocal fetch_calls
+        fetch_calls += 1
+        if fetch_calls == 2:
+            raise SoftTimeLimitExceeded()
+        return {symbol: _success_result(symbol) for symbol in batch_symbols}
+
+    monkeypatch.setattr(module, "_fetch_with_backoff", _fetch_with_backoff)
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_progress",
+        lambda *args, **kwargs: progress_updates.append(kwargs),
+    )
+    monkeypatch.setattr(
+        module,
+        "mark_market_activity_failed",
+        lambda *args, **kwargs: failures.append(kwargs),
+    )
+    monkeypatch.setattr(module.smart_refresh_cache, "update_state", lambda *args, **kwargs: None)
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        module.smart_refresh_cache.run.__wrapped__(
+            module.smart_refresh_cache,
+            "full",
+            market="US",
+            activity_lifecycle="bootstrap",
+        )
+
+    assert any(update["current"] == 100 for update in progress_updates)
+    fake_price_cache.save_warmup_metadata.assert_called_once_with(
+        "failed",
+        100,
+        101,
+        "Soft time limit exceeded",
+        market="US",
+    )
+    assert failures[-1]["current"] == 100
+    assert failures[-1]["total"] == 101
+
+
 def test_smart_refresh_cache_delta_prefers_github_daily_bundle_and_skips_live_fetch(monkeypatch):
     import app.tasks.cache_tasks as module
 
