@@ -2442,16 +2442,16 @@ class OfficialMarketUniverseSourceService:
             raw = raw[:-2]
 
         token = re.sub(r"[^0-9A-Z]", "", raw)
-        match = re.fullmatch(r"0*([0-9]{3,5})([A-Z]?)", token)
+        match = re.fullmatch(r"([0-9]{3,5})([A-Z]?)", token)
         if match is None:
             return ""
 
         digits, suffix = match.groups()
+        if digits.startswith("0"):
+            return ""
         if suffix:
-            return f"{digits.lstrip('0') or digits}{suffix}"
-        if len(digits) < 4:
-            return digits.zfill(4)
-        return digits
+            return f"{digits}{suffix}"
+        return digits if len(digits) == 4 else ""
 
     @staticmethod
     def _parse_optional_float(value: Any) -> float | None:

@@ -86,6 +86,27 @@ def test_bootstrap_plan_uses_stale_top_up_and_full_bootstrap_for_no_history(univ
     ]
 
 
+def test_price_refresh_plan_excludes_unsupported_yahoo_symbols_from_live_jobs():
+    from app.services.price_history_coverage import PriceHistoryCoverage
+    from app.services.price_refresh_planning import (
+        PriceRefreshJobKind,
+        plan_price_refresh_from_input,
+    )
+
+    plan = plan_price_refresh_from_input(_planning_input(
+        all_symbols=["0335.T", "335A.T"],
+        effective_market="JP",
+        coverage=PriceHistoryCoverage(no_history=("0335.T", "335A.T")),
+    ))
+
+    assert plan.all_symbols == ("0335.T", "335A.T")
+    assert plan.symbols == ("335A.T",)
+    assert plan.unsupported_symbols == ("0335.T",)
+    assert [(job.kind, job.symbols, job.period) for job in plan.jobs] == [
+        (PriceRefreshJobKind.NO_HISTORY, ("335A.T",), "2y"),
+    ]
+
+
 def test_full_mode_stays_full_even_when_github_sync_result_is_available(universe_session):
     from app.services.price_refresh_planning import (
         NO_HISTORY_PRICE_BOOTSTRAP_PERIOD,

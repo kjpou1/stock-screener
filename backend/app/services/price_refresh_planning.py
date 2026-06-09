@@ -8,6 +8,8 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
+from app.domain.providers.price_symbol_support import split_supported_price_symbols
+
 from .price_history_coverage import PriceHistoryCoverage
 
 
@@ -133,6 +135,7 @@ class PriceRefreshPlan:
     symbols: tuple[str, ...]
     jobs: tuple[PriceRefreshJob, ...] = ()
     all_symbols: tuple[str, ...] = ()
+    unsupported_symbols: tuple[str, ...] = ()
     symbol_markets: Mapping[str, str] = field(default_factory=dict)
     github_seed: GitHubSeedOutcome | None = None
     github_seed_used: bool = False
@@ -169,6 +172,13 @@ def _normalize_symbols(symbols: Sequence[str]) -> tuple[str, ...]:
     return tuple(str(symbol).upper() for symbol in symbols)
 
 
+def _split_supported_sequence(
+    symbols: Sequence[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    supported, unsupported = split_supported_price_symbols(list(_normalize_symbols(symbols)))
+    return tuple(supported), tuple(unsupported)
+
+
 def _parse_bundle_date(value: Any) -> date | None:
     if isinstance(value, datetime):
         return value.date()
@@ -201,30 +211,45 @@ def build_top_up_jobs(coverage: PriceHistoryCoverage) -> tuple[PriceRefreshJob, 
     return tuple(jobs)
 
 
+def _filter_supported_jobs(
+    jobs: Sequence[PriceRefreshJob],
+) -> tuple[tuple[PriceRefreshJob, ...], tuple[str, ...]]:
+    filtered_jobs: list[PriceRefreshJob] = []
+    unsupported_symbols: list[str] = []
+    for job in jobs:
+        supported, unsupported = _split_supported_sequence(job.symbols)
+        unsupported_symbols.extend(unsupported)
+        if supported:
+            filtered_jobs.append(replace(job, symbols=supported))
+    return tuple(filtered_jobs), tuple(unsupported_symbols)
+
+
 def _symbols_from_jobs(jobs: Sequence[PriceRefreshJob]) -> tuple[str, ...]:
     return tuple(symbol for job in jobs for symbol in job.symbols)
 
 
 def _plan_live_full(symbols: tuple[str, ...]) -> PriceRefreshPlan:
+    supported, unsupported = _split_supported_sequence(symbols)
     jobs = (
         PriceRefreshJob(
             kind=PriceRefreshJobKind.FULL,
-            symbols=symbols,
+            symbols=supported,
             period=NO_HISTORY_PRICE_BOOTSTRAP_PERIOD,
         ),
-    ) if symbols else ()
-    return PriceRefreshPlan(symbols=symbols, jobs=jobs)
+    ) if supported else ()
+    return PriceRefreshPlan(symbols=supported, jobs=jobs, unsupported_symbols=unsupported)
 
 
 def _plan_live_auto(symbols: tuple[str, ...]) -> PriceRefreshPlan:
+    supported, unsupported = _split_supported_sequence(symbols)
     jobs = (
         PriceRefreshJob(
             kind=PriceRefreshJobKind.AUTO,
-            symbols=symbols,
+            symbols=supported,
             period=NO_HISTORY_PRICE_BOOTSTRAP_PERIOD,
         ),
-    ) if symbols else ()
-    return PriceRefreshPlan(symbols=symbols, jobs=jobs)
+    ) if supported else ()
+    return PriceRefreshPlan(symbols=supported, jobs=jobs, unsupported_symbols=unsupported)
 
 
 def _plan_live_top_up(
@@ -232,11 +257,12 @@ def _plan_live_top_up(
     *,
     github_seed: GitHubSeedOutcome | None = None,
 ) -> PriceRefreshPlan:
-    jobs = build_top_up_jobs(coverage)
+    jobs, unsupported = _filter_supported_jobs(build_top_up_jobs(coverage))
     return PriceRefreshPlan(
         symbols=_symbols_from_jobs(jobs),
         jobs=jobs,
         github_seed=github_seed,
+        unsupported_symbols=unsupported,
     )
 
 
@@ -247,7 +273,7 @@ def _plan_github_top_up(
     target_as_of: date | None,
 ) -> PriceRefreshPlan:
     github_as_of = github_seed.as_of_date
-    jobs = build_top_up_jobs(coverage)
+    jobs, unsupported = _filter_supported_jobs(build_top_up_jobs(coverage))
     live_symbols = _symbols_from_jobs(jobs)
     completion_message = None
     if not live_symbols:
@@ -261,6 +287,7 @@ def _plan_github_top_up(
         jobs=jobs,
         github_seed=github_seed,
         github_seed_used=True,
+        unsupported_symbols=unsupported,
         completion_message=completion_message,
     )
 
