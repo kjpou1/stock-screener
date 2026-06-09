@@ -563,7 +563,7 @@ class BulkDataFetcher:
                     )
             else:
                 # Multi-symbol: split by ticker
-                for symbol in symbols:
+                for symbol in fetch_symbols:
                     try:
                         if symbol in raw.columns.get_level_values(0):
                             df = raw[symbol].copy()

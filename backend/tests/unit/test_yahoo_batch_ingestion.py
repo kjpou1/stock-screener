@@ -277,6 +277,33 @@ def test_fetch_batch_prices_short_circuits_zero_prefixed_jp_symbols(monkeypatch)
     assert "zero-prefixed" in results["0130.T"]["error"]
 
 
+def test_fetch_batch_prices_preserves_invalid_jp_result_in_mixed_multi_symbol_batch(monkeypatch):
+    import app.services.bulk_data_fetcher as module
+
+    def fake_download(**kwargs):
+        assert kwargs["tickers"] == ["7203.T", "6758.T"]
+        return pd.concat(
+            {
+                "7203.T": _price_df(date(2026, 3, 18), 100.0),
+                "6758.T": _price_df(date(2026, 3, 18), 200.0),
+            },
+            axis=1,
+        )
+
+    monkeypatch.setattr(module.yf.shared, "_ERRORS", {}, raising=False)
+    monkeypatch.setattr(module.yf, "download", fake_download)
+
+    results = BulkDataFetcher().fetch_batch_prices(
+        ["0130.T", "7203.T", "6758.T"],
+        period="2y",
+    )
+
+    assert results["0130.T"]["error_kind"] == "no_price_data"
+    assert "zero-prefixed" in results["0130.T"]["error"]
+    assert results["7203.T"]["has_error"] is False
+    assert results["6758.T"]["has_error"] is False
+
+
 def test_fetch_price_batch_with_retries_does_not_retry_zero_prefixed_jp_empty_batch(monkeypatch):
     import app.services.bulk_data_fetcher as module
 
