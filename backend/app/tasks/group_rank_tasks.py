@@ -27,6 +27,7 @@ from ..services.market_activity_service import (
     mark_market_activity_failed,
     mark_market_activity_started,
 )
+from ..services.cache.price_cache_warmup import evaluate_warmup_metadata
 from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
@@ -129,23 +130,12 @@ def _validate_same_day_cache_only_group_rankings(
 ) -> Optional[str]:
     """Block same-day group rankings when the post-close warmup is incomplete."""
     warmup_meta = price_cache.get_warmup_metadata(market=market) if price_cache else None
-    if not warmup_meta:
-        return "Missing cache warmup metadata for same-day group ranking run"
-
-    if warmup_meta.get("status") != "completed":
-        return (
-            f"Cache warmup not complete for same-day group ranking run "
-            f"({warmup_meta.get('status')}, {warmup_meta.get('count')}/{warmup_meta.get('total')})"
-        )
-
-    completed_at_raw = warmup_meta.get("completed_at")
-    if completed_at_raw:
-        try:
-            completed_at = datetime.fromisoformat(completed_at_raw)
-            if datetime.now() - completed_at > timedelta(hours=12):
-                return "Cache warmup metadata is stale for same-day group ranking run"
-        except ValueError:
-            return "Cache warmup metadata timestamp is invalid"
+    warmup_readiness = evaluate_warmup_metadata(
+        warmup_meta,
+        context="same-day group ranking run",
+    )
+    if not warmup_readiness.ready:
+        return warmup_readiness.reason
 
     return None
 

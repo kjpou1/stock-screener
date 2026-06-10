@@ -1022,6 +1022,52 @@ def test_orchestrator_marks_failed_when_inner_daily_result_has_error(monkeypatch
     failed.assert_called_once()
 
 
+def test_bootstrap_orchestrator_marks_failed_when_inner_daily_warmup_incomplete(monkeypatch):
+    import app.tasks.group_rank_tasks as module
+
+    fake_db = MagicMock()
+    monkeypatch.setattr(module, "SessionLocal", lambda: fake_db)
+    _patch_serialized_lock(monkeypatch)
+    _patch_calendar_service(
+        monkeypatch,
+        datetime(2026, 3, 20, 17, 40, 0),
+        is_trading_day=True,
+    )
+    monkeypatch.setattr(module.settings, "group_rank_gapfill_enabled", True)
+    monkeypatch.setattr(
+        "app.services.runtime_preferences_service.is_market_enabled_now",
+        lambda _m: True,
+    )
+    monkeypatch.setattr(
+        "app.services.ibd_industry_service.IBDIndustryService.get_all_groups",
+        staticmethod(lambda db, *, market=None: ["Software"]),
+    )
+
+    fake_service = MagicMock()
+    fake_service.find_missing_dates.return_value = []
+    monkeypatch.setattr(module, "get_group_rank_service", lambda: fake_service)
+    monkeypatch.setattr(
+        module,
+        "_calculate_daily_group_rankings_in_process",
+        MagicMock(return_value={
+            "error": "Cache warmup not complete",
+            "reason_code": module.GroupRankReasonCode.WARMUP_INCOMPLETE,
+        }),
+    )
+
+    failed = MagicMock()
+    monkeypatch.setattr(module, "mark_market_activity_failed", failed)
+
+    result = module.calculate_daily_group_rankings_with_gapfill.run(
+        market="US",
+        activity_lifecycle="bootstrap",
+    )
+
+    assert result["error"] == "Daily group ranking failed: Cache warmup not complete"
+    assert result["today"]["error"] == "Cache warmup not complete"
+    failed.assert_called_once()
+
+
 def test_orchestrator_reraises_retry_from_inner_daily_call(monkeypatch):
     """Celery Retry from the inner daily task must not become an error payload."""
     import app.tasks.group_rank_tasks as module

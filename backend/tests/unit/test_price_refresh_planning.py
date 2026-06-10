@@ -86,6 +86,27 @@ def test_bootstrap_plan_uses_stale_top_up_and_full_bootstrap_for_no_history(univ
     ]
 
 
+def test_price_refresh_plan_excludes_unsupported_yahoo_symbols_from_live_jobs():
+    from app.services.price_history_coverage import PriceHistoryCoverage
+    from app.services.price_refresh_planning import (
+        PriceRefreshJobKind,
+        plan_price_refresh_from_input,
+    )
+
+    plan = plan_price_refresh_from_input(_planning_input(
+        all_symbols=["0335.T", "335A.T"],
+        effective_market="JP",
+        coverage=PriceHistoryCoverage(no_history=("0335.T", "335A.T")),
+    ))
+
+    assert plan.all_symbols == ("0335.T", "335A.T")
+    assert plan.symbols == ("335A.T",)
+    assert plan.unsupported_symbols == ("0335.T",)
+    assert [(job.kind, job.symbols, job.period) for job in plan.jobs] == [
+        (PriceRefreshJobKind.NO_HISTORY, ("335A.T",), "2y"),
+    ]
+
+
 def test_full_mode_stays_full_even_when_github_sync_result_is_available(universe_session):
     from app.services.price_refresh_planning import (
         NO_HISTORY_PRICE_BOOTSTRAP_PERIOD,
@@ -266,3 +287,58 @@ def test_build_market_price_refresh_plan_owns_universe_and_github_seed(universe_
     assert plan.symbol_markets == {"0700.HK": "HK", "0005.HK": "HK"}
     assert plan.source is PriceRefreshSource.GITHUB_AND_LIVE
     assert plan.symbols == ("0005.HK",)
+
+
+def test_split_supported_price_symbols_reuses_provider_no_data_policy():
+    from app.domain.providers.price_symbol_support import split_supported_price_symbols
+
+    supported, unsupported = split_supported_price_symbols(
+        ["7203.T", "0123.T", "BAD-W", "AAPL"]
+    )
+
+    assert supported == ["7203.T", "AAPL"]
+    assert unsupported == ["0123.T", "BAD-W"]
+
+
+def test_legacy_symbol_support_imports_reexport_domain_policy():
+    from app.domain.providers.price_symbol_support import split_supported_price_symbols
+    from app.services.price_symbol_validation import (
+        split_supported_price_symbols as service_split_supported_price_symbols,
+    )
+    from app.utils.symbol_support import (
+        split_supported_price_symbols as utils_split_supported_price_symbols,
+    )
+
+    assert service_split_supported_price_symbols is split_supported_price_symbols
+    assert utils_split_supported_price_symbols is split_supported_price_symbols
+
+
+def test_bootstrap_price_readiness_uses_price_refresh_universe_and_support_policy(
+    universe_session,
+):
+    from app.models.stock_universe import StockUniverse
+    from app.services.bootstrap_price_readiness import evaluate_bootstrap_price_readiness
+
+    universe_session.add_all(
+        [
+            StockUniverse(symbol="7203.T", market="JP", market_cap=500),
+            StockUniverse(symbol="0123.T", market="JP", market_cap=400),
+            StockUniverse(symbol="JP-W", market="JP", market_cap=300),
+            StockUniverse(symbol="AAPL", market="US", market_cap=200),
+        ]
+    )
+    universe_session.add(StockPrice(symbol="7203.T", date=date(2026, 6, 8), close=100))
+    universe_session.commit()
+
+    report = evaluate_bootstrap_price_readiness(
+        universe_session,
+        market="jp",
+        as_of_date=date(2026, 6, 8),
+    )
+
+    assert report["market"] == "JP"
+    assert report["eligible"] is True
+    assert report["price_total_symbols"] == 1
+    assert report["price_covered_symbols"] == 1
+    assert report["unsupported_skipped_count"] == 2
+    assert report["unsupported_symbols_preview"] == ["0123.T", "JP-W"]

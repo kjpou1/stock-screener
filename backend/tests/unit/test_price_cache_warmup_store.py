@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
-from app.services.cache.price_cache_warmup import PriceCacheWarmupStore
+import pytest
+
+from app.services.cache.price_cache_warmup import (
+    PriceCacheWarmupStore,
+    evaluate_warmup_metadata,
+)
 
 
 class _FakeRedis:
@@ -70,3 +76,62 @@ def test_complete_warmup_heartbeat_preserves_progress_fields():
     assert saved_payload["current"] == 3
     assert saved_payload["total"] == 10
     assert saved_payload["percent"] == 100.0
+
+
+def test_evaluate_warmup_metadata_reports_partial_progress():
+    readiness = evaluate_warmup_metadata(
+        {
+            "status": "partial",
+            "count": "19",
+            "total": "31",
+            "completed_at": "2026-06-09T08:00:00",
+        },
+        context="same-day breadth run",
+        now=datetime(2026, 6, 9, 9, 0, 0),
+    )
+
+    assert readiness.ready is False
+    assert readiness.count == 19
+    assert readiness.total == 31
+    assert readiness.percent == pytest.approx(61.2903)
+    assert readiness.summary == "partial, 19/31"
+    assert (
+        readiness.reason
+        == "Cache warmup not complete for same-day breadth run (partial, 19/31)"
+    )
+
+
+def test_evaluate_warmup_metadata_rejects_stale_completed_metadata():
+    readiness = evaluate_warmup_metadata(
+        {
+            "status": "completed",
+            "count": 31,
+            "total": 31,
+            "completed_at": "2026-06-08T08:00:00",
+        },
+        context="same-day group ranking run",
+        max_age=timedelta(hours=12),
+        now=datetime(2026, 6, 9, 8, 1, 0),
+    )
+
+    assert readiness.ready is False
+    assert readiness.reason == "Cache warmup metadata is stale for same-day group ranking run"
+
+
+def test_evaluate_warmup_metadata_rejects_completed_missing_completed_at():
+    readiness = evaluate_warmup_metadata(
+        {
+            "status": "completed",
+            "count": 31,
+            "total": 31,
+        },
+        context="same-day group ranking run",
+        max_age=timedelta(hours=12),
+        now=datetime(2026, 6, 9, 8, 1, 0),
+    )
+
+    assert readiness.ready is False
+    assert (
+        readiness.reason
+        == "Cache warmup metadata timestamp is missing for same-day group ranking run"
+    )

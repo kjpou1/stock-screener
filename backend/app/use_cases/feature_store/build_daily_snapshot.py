@@ -56,7 +56,7 @@ from app.services.bootstrap_cache_coverage import (
     MISSING_SYMBOL_PREVIEW_LIMIT,
     evaluate_bootstrap_cache_coverage,
 )
-from app.utils.symbol_support import split_supported_price_symbols
+from app.domain.providers.price_symbol_support import split_supported_price_symbols
 from app.use_cases.feature_store.publish_run import (
     PublishFeatureRunUseCase,
     PublishRunCommand,

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from celery import chain
+from celery.exceptions import Retry
 
 from ..database import SessionLocal
 from ..domain.bootstrap.plan import (
@@ -16,9 +17,12 @@ from ..domain.bootstrap.plan import (
     MarketBootstrapPlan,
     build_bootstrap_plan,
 )
+from ..services.bootstrap_price_readiness import evaluate_bootstrap_price_warmup_wait
 from ..services.market_activity_service import (
     mark_current_market_activity_failed,
+    mark_market_activity_completed,
     mark_market_activity_failed,
+    mark_market_activity_progress,
 )
 from ..services.bootstrap_run_manifest import (
     BootstrapRunManifest,
@@ -33,6 +37,11 @@ from ..tasks.market_queues import (
 from ..celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+WAIT_FOR_BOOTSTRAP_PRICE_WARMUP_TASK_NAME = (
+    "app.tasks.runtime_bootstrap_tasks.wait_for_bootstrap_price_warmup"
+)
+BOOTSTRAP_PRICE_WARMUP_RETRY_COUNTDOWN_SECONDS = 30
+BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES = 120
 
 
 @dataclass(frozen=True)
@@ -158,6 +167,8 @@ def _queue_for_stage(stage) -> str:
         return data_fetch_queue_for_market(stage.kwargs["market"])
     if stage.queue_kind == BootstrapQueueKind.MARKET_JOBS:
         return market_jobs_queue_for_market(stage.kwargs["market"])
+    if stage.queue_kind == BootstrapQueueKind.CELERY:
+        return "celery"
     raise ValueError(f"Unsupported bootstrap queue kind: {stage.queue_kind}")
 
 
@@ -178,6 +189,7 @@ def _build_market_bootstrap_signatures(market_plan: MarketBootstrapPlan) -> list
         BootstrapOperation.REFRESH_OFFICIAL_MARKET_UNIVERSE: refresh_official_market_universe,
         BootstrapOperation.LOAD_TRACKED_IBD_INDUSTRY_GROUPS: load_tracked_ibd_industry_groups,
         BootstrapOperation.SMART_REFRESH_CACHE: smart_refresh_cache,
+        BootstrapOperation.WAIT_FOR_BOOTSTRAP_PRICE_WARMUP: wait_for_bootstrap_price_warmup,
         BootstrapOperation.REFRESH_ALL_FUNDAMENTALS: refresh_all_fundamentals,
         BootstrapOperation.CALCULATE_DAILY_BREADTH_WITH_GAPFILL: (
             calculate_daily_breadth_with_gapfill
@@ -193,6 +205,87 @@ def _build_market_bootstrap_signatures(market_plan: MarketBootstrapPlan) -> list
         .set(queue=_queue_for_stage(stage))
         for stage in market_plan.stages
     ]
+
+
+@celery_app.task(
+    bind=True,
+    name=WAIT_FOR_BOOTSTRAP_PRICE_WARMUP_TASK_NAME,
+    queue="celery",
+    soft_time_limit=300,
+    max_retries=BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES,
+)
+def wait_for_bootstrap_price_warmup(
+    self,
+    market: str,
+    activity_lifecycle: str | None = None,
+) -> dict:
+    from ..wiring.bootstrap import get_market_calendar_service, get_price_cache
+
+    market_code = normalize_market(market)
+    lifecycle = activity_lifecycle or "bootstrap"
+    task_name = getattr(self, "name", WAIT_FOR_BOOTSTRAP_PRICE_WARMUP_TASK_NAME)
+    task_id = getattr(getattr(self, "request", None), "id", None)
+    db = SessionLocal()
+    try:
+        warmup_metadata = get_price_cache().get_warmup_metadata(market=market_code)
+        as_of_date = get_market_calendar_service().last_completed_trading_day(market_code)
+        retries = getattr(getattr(self, "request", None), "retries", 0) or 0
+        decision = evaluate_bootstrap_price_warmup_wait(
+            db,
+            market=market_code,
+            as_of_date=as_of_date,
+            warmup_metadata=warmup_metadata,
+            retries=retries,
+            max_retries=BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES,
+        )
+        if decision.ready:
+            mark_market_activity_completed(
+                db,
+                market=market_code,
+                stage_key="prices",
+                lifecycle=lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                message="Price cache coverage ready",
+            )
+            return decision.ready_payload()
+
+        if decision.exhausted:
+            mark_market_activity_failed(
+                db,
+                market=market_code,
+                stage_key="prices",
+                lifecycle=lifecycle,
+                task_name=task_name,
+                task_id=task_id,
+                message=f"Price cache warmup unavailable: {decision.failure_reason}",
+            )
+            raise RuntimeError(decision.failure_reason)
+
+        mark_market_activity_progress(
+            db,
+            market=market_code,
+            stage_key="prices",
+            lifecycle=lifecycle,
+            task_name=task_name,
+            task_id=task_id,
+            percent=decision.progress_percent,
+            current=decision.current,
+            total=decision.total,
+            message=decision.retry_message,
+        )
+        raise self.retry(
+            exc=RuntimeError(
+                f"waiting_for_bootstrap_price_coverage:{market_code}: "
+                f"{decision.failure_reason}"
+            ),
+            countdown=BOOTSTRAP_PRICE_WARMUP_RETRY_COUNTDOWN_SECONDS,
+            max_retries=BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES,
+        )
+    except Retry:
+        raise
+    finally:
+        db.close()
 
 
 def _apply_bootstrap_workflow(workflow, errback):

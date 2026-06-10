@@ -8,11 +8,146 @@ The unsuffixed legacy key remains readable for one-shot post-deploy reads.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Optional
 
 from ...tasks.market_queues import market_suffix
 from ...theme_platform.contracts import WarmupHeartbeatState, WarmupStateSnapshot
+
+
+WARMUP_METADATA_MAX_AGE = timedelta(hours=12)
+
+
+@dataclass(frozen=True)
+class WarmupMetadataReadiness:
+    ready: bool
+    reason: str | None
+    summary: str
+    status: str | None = None
+    count: int | None = None
+    total: int | None = None
+    percent: float | None = None
+
+
+def _warmup_int(metadata: dict | None, key: str) -> int | None:
+    if not metadata:
+        return None
+    value = metadata.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _warmup_percent(count: int | None, total: int | None) -> float | None:
+    if count is None or total is None or total <= 0:
+        return None
+    return round((count / total) * 100, 4)
+
+
+def _warmup_summary(
+    metadata: dict | None,
+    *,
+    status: str | None = None,
+    count: int | None = None,
+    total: int | None = None,
+) -> str:
+    if not metadata:
+        return "missing metadata"
+    summary_status = status or "missing status"
+    if count is None and total is None:
+        return summary_status
+    return f"{summary_status}, {count}/{total}"
+
+
+def _reference_now(completed_at: datetime, now: datetime | None) -> datetime:
+    if now is None:
+        return datetime.now(completed_at.tzinfo) if completed_at.tzinfo else datetime.now()
+    if completed_at.tzinfo and now.tzinfo is None:
+        return now.replace(tzinfo=completed_at.tzinfo)
+    if completed_at.tzinfo is None and now.tzinfo is not None:
+        return now.replace(tzinfo=None)
+    return now
+
+
+def evaluate_warmup_metadata(
+    metadata: dict | None,
+    *,
+    context: str,
+    max_age: timedelta = WARMUP_METADATA_MAX_AGE,
+    now: datetime | None = None,
+) -> WarmupMetadataReadiness:
+    """Interpret price-cache warmup metadata for same-day cache-only guards."""
+    if not metadata:
+        return WarmupMetadataReadiness(
+            ready=False,
+            reason=f"Missing cache warmup metadata for {context}",
+            summary="missing metadata",
+        )
+
+    status = str(metadata.get("status") or "missing status")
+    count = _warmup_int(metadata, "count")
+    total = _warmup_int(metadata, "total")
+    percent = _warmup_percent(count, total)
+    summary = _warmup_summary(metadata, status=status, count=count, total=total)
+
+    if status != "completed":
+        return WarmupMetadataReadiness(
+            ready=False,
+            reason=f"Cache warmup not complete for {context} ({summary})",
+            summary=summary,
+            status=status,
+            count=count,
+            total=total,
+            percent=percent,
+        )
+
+    completed_at_raw = metadata.get("completed_at")
+    if not completed_at_raw:
+        return WarmupMetadataReadiness(
+            ready=False,
+            reason=f"Cache warmup metadata timestamp is missing for {context}",
+            summary=summary,
+            status=status,
+            count=count,
+            total=total,
+            percent=percent,
+        )
+    try:
+        completed_at = datetime.fromisoformat(str(completed_at_raw))
+    except ValueError:
+        return WarmupMetadataReadiness(
+            ready=False,
+            reason="Cache warmup metadata timestamp is invalid",
+            summary=summary,
+            status=status,
+            count=count,
+            total=total,
+            percent=percent,
+        )
+    if _reference_now(completed_at, now) - completed_at > max_age:
+        return WarmupMetadataReadiness(
+            ready=False,
+            reason=f"Cache warmup metadata is stale for {context}",
+            summary=summary,
+            status=status,
+            count=count,
+            total=total,
+            percent=percent,
+        )
+
+    return WarmupMetadataReadiness(
+        ready=True,
+        reason=None,
+        summary=summary,
+        status=status,
+        count=count,
+        total=total,
+        percent=percent,
+    )
 
 
 def scoped_heartbeat_key(base: str, market: Optional[str]) -> str:

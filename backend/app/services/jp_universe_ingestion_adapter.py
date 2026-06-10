@@ -8,6 +8,7 @@ import json
 import re
 from typing import Any, Iterable, Mapping
 
+from app.domain.providers.price_symbol_support import is_zero_prefixed_jp_local_code
 from .security_master_service import security_master_resolver
 
 _JP_EXCHANGE_ALIASES: dict[str, str] = {
@@ -129,6 +130,11 @@ class JPUniverseIngestionAdapter:
             raise ValueError(
                 f"Invalid JP symbol '{source_symbol}'. "
                 "Expected JP local code with optional .T/.JP suffix."
+            )
+        if is_zero_prefixed_jp_local_code(token):
+            raise ValueError(
+                f"Invalid JP symbol '{source_symbol}'. "
+                "JP local codes must not be zero-prefixed."
             )
         return token
 

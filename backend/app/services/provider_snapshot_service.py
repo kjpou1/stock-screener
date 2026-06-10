@@ -19,13 +19,13 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..domain.markets import market_registry
+from ..domain.providers.price_symbol_support import is_unsupported_yahoo_price_symbol
 from ..models.provider_snapshot import (
     ProviderSnapshotPointer,
     ProviderSnapshotRow,
     ProviderSnapshotRun,
 )
 from ..models.stock_universe import UNIVERSE_STATUS_ACTIVE, StockUniverse
-from ..utils.symbol_support import is_unsupported_yahoo_price_symbol
 from .bulk_data_fetcher import BulkDataFetcher
 from .finviz_parser import FinvizParser
 from .github_release_sync_service import GitHubReleaseSyncService
@@ -106,8 +106,6 @@ class ProviderSnapshotService:
         "market_cap",
         "shares_outstanding",
     )
-    YAHOO_UNSUPPORTED_SUFFIXES = ("U", "UN", "UNT", "UNIT", "R", "RT")
-    YAHOO_UNSUPPORTED_PREFIXES = ("W", "WS", "WT")
     WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION = WEEKLY_REFERENCE_BUNDLE_SCHEMA_VERSION
     WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION = WEEKLY_REFERENCE_MANIFEST_SCHEMA_VERSION
     WEEKLY_REFERENCE_RELEASE_TAG = WEEKLY_REFERENCE_RELEASE_TAG

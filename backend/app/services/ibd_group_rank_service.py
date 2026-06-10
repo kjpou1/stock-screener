@@ -19,7 +19,7 @@ from ..config import settings
 from ..models.industry import IBDGroupRank
 from ..models.stock_universe import StockUniverse
 from ..models.scan_result import Scan, ScanResult
-from ..utils.symbol_support import is_unsupported_yahoo_price_symbol
+from ..domain.providers.price_symbol_support import is_unsupported_yahoo_price_symbol
 from .ibd_industry_service import IBDIndustryService
 from .price_cache_service import PriceCacheService
 from .benchmark_cache_service import BenchmarkCacheService

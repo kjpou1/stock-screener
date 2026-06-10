@@ -717,7 +717,7 @@ def build_daily_snapshot(
     )
     from app.tasks.market_queues import log_extra, normalize_market
     from app.utils.parallelism import bounded_symbol_workers
-    from app.utils.symbol_support import split_supported_price_symbols
+    from app.domain.providers.price_symbol_support import split_supported_price_symbols
     from app.use_cases.feature_store.build_daily_snapshot import (
         BootstrapCacheCoverageInsufficient,
         BuildDailySnapshotCommand,

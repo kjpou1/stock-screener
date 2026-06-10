@@ -12,7 +12,7 @@ from app.services.price_refresh_planning import (
     NO_HISTORY_PRICE_BOOTSTRAP_PERIOD,
     STALE_PRICE_TOP_UP_PERIOD,
 )
-from app.utils.symbol_support import split_supported_price_symbols
+from app.domain.providers.price_symbol_support import split_supported_price_symbols
 
 
 STATIC_DAILY_PRICE_REFRESH_PERIOD = STALE_PRICE_TOP_UP_PERIOD

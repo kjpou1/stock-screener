@@ -12,6 +12,7 @@ from app.domain.markets.catalog import get_market_catalog
 class BootstrapQueueKind(str, Enum):
     DATA_FETCH = "data_fetch"
     MARKET_JOBS = "market_jobs"
+    CELERY = "celery"
 
 
 class BootstrapOperation(str, Enum):
@@ -19,6 +20,7 @@ class BootstrapOperation(str, Enum):
     REFRESH_OFFICIAL_MARKET_UNIVERSE = "refresh_official_market_universe"
     LOAD_TRACKED_IBD_INDUSTRY_GROUPS = "load_tracked_ibd_industry_groups"
     SMART_REFRESH_CACHE = "smart_refresh_cache"
+    WAIT_FOR_BOOTSTRAP_PRICE_WARMUP = "wait_for_bootstrap_price_warmup"
     REFRESH_ALL_FUNDAMENTALS = "refresh_all_fundamentals"
     CALCULATE_DAILY_BREADTH_WITH_GAPFILL = "calculate_daily_breadth_with_gapfill"
     CALCULATE_DAILY_GROUP_RANKINGS_WITH_GAPFILL = "calculate_daily_group_rankings_with_gapfill"
@@ -108,6 +110,12 @@ def _build_market_plan(market: str) -> MarketBootstrapPlan:
                 queue_kind=BootstrapQueueKind.DATA_FETCH,
                 market=market,
                 mode="bootstrap",
+            ),
+            _stage(
+                key="price_warmup",
+                operation=BootstrapOperation.WAIT_FOR_BOOTSTRAP_PRICE_WARMUP,
+                queue_kind=BootstrapQueueKind.CELERY,
+                market=market,
             ),
             _stage(
                 key="fundamentals",

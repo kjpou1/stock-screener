@@ -1471,6 +1471,33 @@ def test_ingest_jp_from_csv_reports_rejected_rows_in_non_strict_mode():
     db.close()
 
 
+def test_ingest_jp_from_csv_rejects_zero_prefixed_local_codes():
+    TestingSessionLocal = _make_session()
+    db = TestingSessionLocal()
+    csv_content = "\n".join(
+        [
+            "symbol,name,exchange",
+            "0130,Invalid Zero Prefixed,TSE",
+            "7203,Toyota,TSE",
+        ]
+    )
+
+    stats = stock_universe_service.ingest_jp_from_csv(
+        db,
+        csv_content,
+        source_name="tse_official",
+        snapshot_id="jp-20260412",
+        strict=False,
+    )
+
+    assert stats["added"] == 1
+    assert stats["total"] == 1
+    assert stats["rejected"] == 1
+    assert stats["rejected_rows"][0]["source_symbol"] == "0130"
+    assert "zero-prefixed" in stats["rejected_rows"][0]["reason"]
+    db.close()
+
+
 def test_ingest_jp_from_csv_merges_duplicate_rows_to_keep_richer_metadata():
     TestingSessionLocal = _make_session()
     db = TestingSessionLocal()
