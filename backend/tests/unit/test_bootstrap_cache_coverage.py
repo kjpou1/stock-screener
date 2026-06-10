@@ -17,12 +17,13 @@ from app.models.stock import StockFundamental, StockPrice
 from app.services.bootstrap_cache_coverage import (
     BootstrapCacheCoverageReport,
     BootstrapPriceCoverageReport,
-    bootstrap_coverage_policy_for_market,
     evaluate_bootstrap_cache_coverage,
     evaluate_bootstrap_price_cache_coverage,
     normalize_bootstrap_gate_report,
 )
+import app.services.bootstrap_cache_coverage as bootstrap_cache_coverage_module
 from app.domain.markets.catalog import get_market_catalog
+from app.services.price_coverage_policy import price_coverage_policy_for_market
 
 
 def _session():
@@ -260,6 +261,17 @@ def test_bootstrap_cache_report_uses_price_threshold_as_compatibility_alias_with
     assert report["fundamentals_threshold"] == 0.95
 
 
+def test_bootstrap_coverage_uses_shared_price_policy_without_alias_exports():
+    for alias in (
+        "BOOTSTRAP_CACHE_ONLY_MIN_COVERAGE",
+        "BOOTSTRAP_CACHE_ONLY_MIN_FUNDAMENTALS_COVERAGE",
+        "BOOTSTRAP_PRICE_MIN_COVERAGE_BY_MARKET",
+        "BootstrapCoveragePolicy",
+        "bootstrap_coverage_policy_for_market",
+    ):
+        assert not hasattr(bootstrap_cache_coverage_module, alias), alias
+
+
 def test_normalize_bootstrap_gate_report_owns_threshold_and_unsupported_metadata():
     report = normalize_bootstrap_gate_report(
         market="TW",
@@ -347,7 +359,7 @@ def test_bootstrap_price_thresholds_cover_every_supported_market():
     )
 
     for market, expected_threshold in expected_price_thresholds.items():
-        policy = bootstrap_coverage_policy_for_market(market)
+        policy = price_coverage_policy_for_market(market)
 
         assert policy.market == market
         assert policy.price_min_coverage == expected_threshold, market

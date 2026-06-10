@@ -10,10 +10,7 @@ market workload lease to avoid same-market overlap with scans.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
-import gc
 import logging
-import sys
-from typing import Optional
 from datetime import datetime, date, timedelta
 import time
 
@@ -27,13 +24,15 @@ from ..services.market_activity_service import (
     mark_market_activity_failed,
     mark_market_activity_started,
 )
-from ..services.cache.price_cache_warmup import evaluate_warmup_metadata
+from ..services.group_rank_cache_policy import GroupRankCacheRequirement
+from ..services.group_rank_warmup_policy import evaluate_same_day_group_rank_warmup
 from ..services.ibd_group_rank_service import (
     IncompleteGroupRankingCacheError,
     MissingIBDIndustryMappingsError,
 )
 from ..services.market_taxonomy_service import TaxonomyLoadError
 from ..wiring.bootstrap import get_group_rank_service, get_market_calendar_service
+from .group_rank_memory import release_group_rank_gapfill_memory as _release_group_rank_gapfill_memory
 from .workload_coordination import serialized_market_workload
 
 logger = logging.getLogger(__name__)
@@ -98,46 +97,6 @@ def _mark_market_activity_failed_safely(db, **kwargs) -> None:
             },
             exc_info=True,
         )
-
-
-def _group_rank_result_error(result) -> str | None:
-    if not isinstance(result, dict):
-        return None
-    error = result.get("error")
-    if error:
-        return str(error)
-    return None
-
-
-def _release_group_rank_gapfill_memory() -> None:
-    """Return freed pandas/SQLAlchemy heap pages before the same worker ranks today."""
-    collected = gc.collect()
-    if sys.platform.startswith("linux"):
-        try:
-            import ctypes
-
-            malloc_trim = getattr(ctypes.CDLL("libc.so.6"), "malloc_trim", None)
-            if malloc_trim is not None:
-                malloc_trim(0)
-        except Exception:
-            logger.debug("malloc_trim unavailable after group-ranking gap-fill", exc_info=True)
-    logger.debug("Collected %d objects after group-ranking gap-fill", collected)
-
-
-def _validate_same_day_cache_only_group_rankings(
-    price_cache,
-    market: Optional[str] = None,
-) -> Optional[str]:
-    """Block same-day group rankings when the post-close warmup is incomplete."""
-    warmup_meta = price_cache.get_warmup_metadata(market=market) if price_cache else None
-    warmup_readiness = evaluate_warmup_metadata(
-        warmup_meta,
-        context="same-day group ranking run",
-    )
-    if not warmup_readiness.ready:
-        return warmup_readiness.reason
-
-    return None
 
 
 def _should_repair_current_us_metadata(
@@ -239,6 +198,11 @@ def calculate_daily_group_rankings(
         # Initialize service
         service = get_group_rank_service()
         same_day_cache_only = force_cache_only or calc_date == today_local
+        cache_requirement = (
+            GroupRankCacheRequirement.strict()
+            if same_day_cache_only
+            else GroupRankCacheRequirement.disabled()
+        )
 
         if same_day_cache_only:
             if force_cache_only or _ALLOW_SAME_DAY_WARMUP_BYPASS.get():
@@ -246,12 +210,13 @@ def calculate_daily_group_rankings(
                     "Bypassing same-day group ranking warmup metadata gate for in-process static export"
                 )
             else:
-                completeness_error = _validate_same_day_cache_only_group_rankings(
+                warmup_decision = evaluate_same_day_group_rank_warmup(
                     service.price_cache,
                     market=market,
                 )
-                if completeness_error:
-                    logger.error("✗ Refusing to publish daily group rankings: %s", completeness_error)
+                cache_requirement = warmup_decision.cache_requirement
+                if warmup_decision.error:
+                    logger.error("✗ Refusing to publish daily group rankings: %s", warmup_decision.error)
                     logger.info("=" * 60)
                     _mark_market_activity_failed_safely(
                         db,
@@ -260,10 +225,10 @@ def calculate_daily_group_rankings(
                         lifecycle=activity_lifecycle,
                         task_name=getattr(self, "name", "calculate_daily_group_rankings"),
                         task_id=getattr(getattr(self, "request", None), "id", None),
-                        message=completeness_error,
+                        message=warmup_decision.error,
                     )
                     return {
-                        'error': completeness_error,
+                        'error': warmup_decision.error,
                         'reason_code': GroupRankReasonCode.WARMUP_INCOMPLETE,
                         'date': calc_date.strftime('%Y-%m-%d'),
                         'timestamp': datetime.now().isoformat(),
@@ -272,12 +237,15 @@ def calculate_daily_group_rankings(
 
         # Calculate rankings
         logger.info(f"Starting group ranking calculation for {calc_date}...")
+        ranking_kwargs = {
+            "market": effective_market,
+            "cache_only": same_day_cache_only,
+            "cache_requirement": cache_requirement,
+        }
         results = service.calculate_group_rankings(
             db,
             calc_date,
-            market=effective_market,
-            cache_only=same_day_cache_only,
-            require_complete_cache=same_day_cache_only,
+            **ranking_kwargs,
         )
 
         # Calculate duration
@@ -654,7 +622,9 @@ def calculate_daily_group_rankings_with_gapfill(
                 activity_lifecycle=activity_lifecycle,
             )
             result['today'] = today_result
-            today_error = _group_rank_result_error(today_result)
+            today_error = None
+            if isinstance(today_result, dict) and today_result.get("error"):
+                today_error = str(today_result["error"])
             if today_error:
                 raise RuntimeError(f"Daily group ranking failed: {today_error}")
         else:

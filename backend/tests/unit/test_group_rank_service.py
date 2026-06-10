@@ -11,6 +11,7 @@ from app.config import settings
 from app.database import Base
 from app.models.industry import IBDGroupRank
 from app.models.stock_universe import StockUniverse
+from app.services.group_rank_cache_policy import GroupRankCacheRequirement
 from app.services.ibd_group_rank_service import (
     IBDGroupRankService,
     IncompleteGroupRankingCacheError,
@@ -287,7 +288,7 @@ def test_cache_only_missing_market_benchmark_names_market_symbol(db_session, mon
             date(2026, 5, 1),
             market="JP",
             cache_only=True,
-            require_complete_cache=True,
+            cache_requirement=GroupRankCacheRequirement.strict(),
         )
 
     assert str(excinfo.value) == "^N225 benchmark data is missing from cache for JP"
@@ -535,10 +536,51 @@ def test_calculate_group_rankings_rejects_incomplete_cache_only_inputs(db_sessio
             db_session,
             date(2026, 3, 20),
             cache_only=True,
-            require_complete_cache=True,
+            cache_requirement=GroupRankCacheRequirement.strict(),
         )
 
     assert excinfo.value.stats["cache_miss_symbols"] == 1
+    store_rankings.assert_not_called()
+
+
+def test_calculate_group_rankings_rejects_cache_coverage_below_minimum(db_session, monkeypatch):
+    service = _make_group_rank_service()
+    price_data = _price_frame()
+
+    monkeypatch.setattr(
+        "app.services.ibd_group_rank_service.IBDIndustryService.get_all_groups",
+        lambda db, **kw: ["Software"],
+    )
+    monkeypatch.setattr(
+        service,
+        "_prefetch_all_data",
+        lambda db, cache_only=False, **kw: (
+            price_data,
+            {"AAPL": price_data, "MSFT": None},
+            {"AAPL", "MSFT"},
+            {"AAPL": 1_000_000_000, "MSFT": 1_000_000_000},
+            {
+                "target_symbols": 2,
+                "symbols_with_prices": 1,
+                "cache_miss_symbols": 1,
+                "spy_cached": True,
+            },
+        ),
+    )
+    store_rankings = Mock()
+    monkeypatch.setattr(service, "_store_rankings", store_rankings)
+
+    with pytest.raises(IncompleteGroupRankingCacheError) as excinfo:
+        service.calculate_group_rankings(
+            db_session,
+            date(2026, 6, 10),
+            market="TW",
+            cache_only=True,
+            cache_requirement=GroupRankCacheRequirement.minimum(0.55, reason="test"),
+        )
+
+    assert excinfo.value.stats["cache_coverage_ratio"] == 0.5
+    assert excinfo.value.stats["cache_coverage_min"] == 0.55
     store_rankings.assert_not_called()
 
 
