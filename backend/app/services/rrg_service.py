@@ -55,14 +55,6 @@ DEFAULT_TAIL_WEEKS = 8
 DEFAULT_LOOKBACK_DAYS = 400  # enough daily rows to build Z_WINDOW + tail weeks
 
 
-def _market_codes_with_rrg_capability(capability: str) -> frozenset[str]:
-    return frozenset(get_market_catalog().market_codes_with_capability(capability))
-
-
-RRG_GROUPS_ENABLED_MARKETS = _market_codes_with_rrg_capability("rrg_groups")
-RRG_SECTORS_ENABLED_MARKETS = _market_codes_with_rrg_capability("rrg_sectors")
-
-
 @dataclass(frozen=True)
 class RRGParams:
     """Parameters controlling the RRG transform."""
@@ -248,45 +240,16 @@ class RRGService:
     def __init__(
         self,
         *,
-        group_rank_service: Any,
-        market_group_ranking_service: Any | None = None,
+        history_provider: Any,
         taxonomy_service: Any | None = None,
-        history_provider: Any | None = None,
+        market_catalog: Any | None = None,
     ) -> None:
-        self._group_rank_service = group_rank_service
-        self._market_group_ranking_service = market_group_ranking_service
-        self._taxonomy_service = taxonomy_service
         self._history_provider = history_provider
+        self._taxonomy_service = taxonomy_service
+        self._market_catalog = market_catalog or get_market_catalog()
 
-    def _get_market_group_ranking_service(self) -> Any:
-        if self._market_group_ranking_service is None:
-            from .market_group_ranking_service import get_market_group_ranking_service
-
-            self._market_group_ranking_service = get_market_group_ranking_service()
-        return self._market_group_ranking_service
-
-    def _get_taxonomy_service(self) -> Any:
-        if self._taxonomy_service is None:
-            from .market_taxonomy_service import get_market_taxonomy_service
-
-            self._taxonomy_service = get_market_taxonomy_service()
-        return self._taxonomy_service
-
-    def _get_history_provider(self) -> Any:
-        if self._history_provider is None:
-            from .rrg_history_provider import (
-                CompositeRRGHistoryProvider,
-                FeatureRunGroupRankHistoryProvider,
-                USGroupRankHistoryProvider,
-            )
-
-            self._history_provider = CompositeRRGHistoryProvider(
-                us_provider=USGroupRankHistoryProvider(self._group_rank_service),
-                feature_run_provider=FeatureRunGroupRankHistoryProvider(
-                    self._get_market_group_ranking_service()
-                ),
-            )
-        return self._history_provider
+    def available_scopes_for_market(self, market: str | None) -> tuple[str, ...]:
+        return self._market_catalog.rrg_scopes_for_market(market or "US")
 
     def get_group_sector_map(self, db: Any, market: str = "US") -> Dict[str, str]:
         """Map each IBD industry group -> its constituents' dominant GICS sector.
@@ -295,8 +258,12 @@ class RRGService:
         vote, since the codebase has no IBD-native sector taxonomy.
         """
         market = (market or "US").upper()
-        if market != "US" and market in RRG_SECTORS_ENABLED_MARKETS:
-            sector_map = self._get_taxonomy_service().sector_map_for_market(market)
+        if (
+            market != "US"
+            and "sectors" in self.available_scopes_for_market(market)
+            and self._taxonomy_service is not None
+        ):
+            sector_map = self._taxonomy_service.sector_map_for_market(market)
             if sector_map:
                 return sector_map
 
@@ -355,21 +322,24 @@ class RRGService:
         sectors without re-querying. ``get_rrg`` is the single-scope shorthand.
         """
         market = (market or "US").upper()
-        if market not in RRG_GROUPS_ENABLED_MARKETS:
-            return self._empty_scopes(market, scopes)
-
-        if all(scope == "sectors" and market not in RRG_SECTORS_ENABLED_MARKETS for scope in scopes):
-            return self._empty_scopes(market, scopes)
+        requested_scopes = tuple(dict.fromkeys(scopes))
+        available_scopes = set(self.available_scopes_for_market(market))
+        if not any(scope in available_scopes for scope in requested_scopes):
+            return self._empty_scopes(market, requested_scopes)
 
         params = RRGParams(tail_weeks=tail_weeks)
         latest_date, meta, group_series = self._fetch_inputs(db, market, lookback_days)
         if latest_date is None:
-            return self._empty_scopes(market, scopes)
+            return self._empty_scopes(market, requested_scopes)
         return {
-            scope: self._build_scope_payload(
-                db, market, scope, latest_date, meta, group_series, params
+            scope: (
+                self._build_scope_payload(
+                    db, market, scope, latest_date, meta, group_series, params
+                )
+                if scope in available_scopes
+                else self._empty_scope(market, scope, latest_date=latest_date)
             )
-            for scope in scopes
+            for scope in requested_scopes
         }
 
     @staticmethod
@@ -384,6 +354,15 @@ class RRGService:
             for scope in scopes
         }
 
+    @staticmethod
+    def _empty_scope(
+        market: str,
+        scope: str,
+        *,
+        latest_date: str | None = None,
+    ) -> Dict[str, Any]:
+        return {"date": latest_date, "market": market, "scope": scope, "groups": []}
+
     def _fetch_inputs(
         self, db: Any, market: str, lookback_days: int
     ) -> Tuple[
@@ -392,7 +371,7 @@ class RRGService:
         Dict[str, List[Tuple[date, float, int]]],
     ]:
         """Read the current rankings (metadata) + batched group history (one query)."""
-        return self._get_history_provider().get_all_groups_history(
+        return self._history_provider.get_all_groups_history(
             db,
             market=market,
             days=lookback_days,
@@ -409,8 +388,6 @@ class RRGService:
         params: RRGParams,
     ) -> Dict[str, Any]:
         if scope == "sectors":
-            if market not in RRG_SECTORS_ENABLED_MARKETS:
-                return {"date": latest_date, "market": market, "scope": scope, "groups": []}
             series, scope_meta = self._aggregate_sectors(db, market, group_series)
         else:
             series = {

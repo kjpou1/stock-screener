@@ -98,6 +98,10 @@ def _catalog_market_codes_by_capability(capability: str) -> tuple[str, ...]:
     return get_market_catalog().market_codes_with_capability(capability)
 
 
+def _catalog_market_codes_by_rrg_scope(scope: str) -> tuple[str, ...]:
+    return get_market_catalog().market_codes_with_rrg_scope(scope)
+
+
 def _make_session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -413,11 +417,8 @@ def test_endpoint_capability_allowlists_match_catalog_capabilities() -> None:
     assert groups.SUPPORTED_GROUP_MARKETS == _catalog_market_codes_by_capability(
         "group_rankings"
     )
-    assert groups.SUPPORTED_RRG_GROUP_MARKETS == _catalog_market_codes_by_capability(
-        "rrg_groups"
-    )
-    assert groups.SUPPORTED_RRG_SECTOR_MARKETS == _catalog_market_codes_by_capability(
-        "rrg_sectors"
+    assert groups.SUPPORTED_RRG_MARKETS == _catalog_market_codes_by_rrg_scope(
+        "groups"
     )
     assert scans.SUPPORTED_SCAN_REFRESH_MARKETS == _catalog_market_codes_by_capability(
         "feature_snapshot"
@@ -460,6 +461,42 @@ def _assert_allowlist_assigned_from_capability_query(
     raise AssertionError(f"{module.__name__}.{constant_name} is missing")
 
 
+def _assert_allowlist_assigned_from_rrg_scope_query(
+    module,
+    constant_name: str,
+    scope: str,
+) -> None:
+    tree = ast.parse(inspect.getsource(module))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == constant_name
+            for target in node.targets
+        ):
+            continue
+        call = node.value
+        assert isinstance(call, ast.Call), (
+            f"{module.__name__}.{constant_name} must be assigned from a "
+            "Market Catalog RRG scope query, not a local literal/comprehension"
+        )
+        function_name = (
+            call.func.id
+            if isinstance(call.func, ast.Name)
+            else call.func.attr
+            if isinstance(call.func, ast.Attribute)
+            else None
+        )
+        assert function_name == "market_codes_with_rrg_scope"
+        assert len(call.args) == 1
+        scope_arg = call.args[0]
+        assert isinstance(scope_arg, ast.Constant)
+        assert scope_arg.value == scope
+        return
+
+    raise AssertionError(f"{module.__name__}.{constant_name} is missing")
+
+
 def test_endpoint_capability_allowlists_are_catalog_queries_not_local_lists() -> None:
     _assert_allowlist_assigned_from_capability_query(
         breadth,
@@ -471,15 +508,10 @@ def test_endpoint_capability_allowlists_are_catalog_queries_not_local_lists() ->
         "SUPPORTED_GROUP_MARKETS",
         "group_rankings",
     )
-    _assert_allowlist_assigned_from_capability_query(
+    _assert_allowlist_assigned_from_rrg_scope_query(
         groups,
-        "SUPPORTED_RRG_GROUP_MARKETS",
-        "rrg_groups",
-    )
-    _assert_allowlist_assigned_from_capability_query(
-        groups,
-        "SUPPORTED_RRG_SECTOR_MARKETS",
-        "rrg_sectors",
+        "SUPPORTED_RRG_MARKETS",
+        "groups",
     )
     _assert_allowlist_assigned_from_capability_query(
         scans,

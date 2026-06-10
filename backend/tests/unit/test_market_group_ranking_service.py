@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun
 from app.services.market_group_ranking_service import MarketGroupRankingService
+from app.services.rrg_history_provider import CachedFeatureRunRRGHistoryProvider
 
 
 def test_get_rank_movers_separates_gainers_and_losers(monkeypatch):
@@ -120,8 +121,9 @@ def test_get_current_rank_map_skips_historical_rank_change_work(monkeypatch):
     assert rank_map == {"Internet Services": 4, "Software": 7}
 
 
-def test_get_all_groups_history_loads_each_run_once_and_returns_ascending_series(monkeypatch):
+def test_cached_rrg_history_provider_loads_each_run_once_and_returns_ascending_series(monkeypatch):
     service = MarketGroupRankingService()
+    provider = CachedFeatureRunRRGHistoryProvider(service)
     latest_run = SimpleNamespace(id=3, as_of_date=date(2026, 4, 3))
     middle_run = SimpleNamespace(id=2, as_of_date=date(2026, 4, 2))
     oldest_run = SimpleNamespace(id=1, as_of_date=date(2026, 4, 1))
@@ -169,8 +171,9 @@ def test_get_all_groups_history_loads_each_run_once_and_returns_ascending_series
     monkeypatch.setattr(service, "_load_run_rows", _load_rows)
     monkeypatch.setattr(service, "compute_group_rankings_from_rows", _rankings)
 
-    latest_date, meta, series = service.get_all_groups_history(
-        Session(), market="HK", days=30
+    db = Session()
+    latest_date, meta, series = provider.get_all_groups_history(
+        db, market="HK", days=30
     )
 
     assert load_calls == [3, 2, 1]
@@ -182,3 +185,10 @@ def test_get_all_groups_history_loads_each_run_once_and_returns_ascending_series
         (date(2026, 4, 3), 73.0, 13),
     ]
     assert series["Banks"][-1] == (date(2026, 4, 3), 58.0, 8)
+
+    assert provider.get_all_groups_history(db, market="HK", days=30) == (
+        latest_date,
+        meta,
+        series,
+    )
+    assert load_calls == [3, 2, 1]

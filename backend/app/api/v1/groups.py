@@ -32,6 +32,7 @@ from ...domain.analytics.scope import market_scope_tag
 from ...domain.markets.catalog import get_market_catalog
 from ...services.market_group_ranking_service import get_market_group_ranking_service
 from ...services.market_taxonomy_service import get_market_taxonomy_service
+from ...services.rrg_history_provider import build_rrg_history_provider
 from ...services.rrg_service import RRGService
 from ...services.ui_snapshot_service import GroupsBootstrapUnavailableError
 from ...wiring.bootstrap import get_group_rank_service, get_ui_snapshot_service
@@ -41,10 +42,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 _market_catalog = get_market_catalog()
 SUPPORTED_GROUP_MARKETS = _market_catalog.market_codes_with_capability("group_rankings")
-SUPPORTED_RRG_GROUP_MARKETS = _market_catalog.market_codes_with_capability("rrg_groups")
-SUPPORTED_RRG_SECTOR_MARKETS = _market_catalog.market_codes_with_capability("rrg_sectors")
+SUPPORTED_RRG_MARKETS = _market_catalog.market_codes_with_rrg_scope("groups")
 MARKET_QUERY_DESCRIPTION = "Market code: " + ", ".join(SUPPORTED_GROUP_MARKETS)
-RRG_MARKET_QUERY_DESCRIPTION = "RRG market code: " + ", ".join(SUPPORTED_RRG_GROUP_MARKETS)
+RRG_MARKET_QUERY_DESCRIPTION = "RRG market code: " + ", ".join(SUPPORTED_RRG_MARKETS)
 DEFAULT_GROUP_PERIOD = "1w"
 
 
@@ -58,8 +58,10 @@ def _get_market_group_service():
 
 def _get_rrg_service():
     return RRGService(
-        group_rank_service=_get_group_rank_service(),
-        market_group_ranking_service=_get_market_group_service(),
+        history_provider=build_rrg_history_provider(
+            group_rank_service=_get_group_rank_service(),
+            market_group_ranking_service=_get_market_group_service(),
+        ),
         taxonomy_service=get_market_taxonomy_service(),
     )
 
@@ -79,12 +81,12 @@ def _normalize_market_param(market: str | None) -> str:
 
 def _normalize_rrg_market_param(market: str | None) -> str:
     normalized = str(market or "US").strip().upper()
-    if normalized not in SUPPORTED_RRG_GROUP_MARKETS:
+    if normalized not in SUPPORTED_RRG_MARKETS:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"Unsupported RRG market '{market}'. Expected one of: "
-                f"{', '.join(SUPPORTED_RRG_GROUP_MARKETS)}."
+                f"{', '.join(SUPPORTED_RRG_MARKETS)}."
             ),
         )
     return normalized
@@ -254,15 +256,16 @@ async def get_rrg(
     quadrants. Math is computed server-side (see ``services/rrg_service.py``).
     """
     normalized_market = _normalize_rrg_market_param(market)
-    if scope == "sectors" and normalized_market not in SUPPORTED_RRG_SECTOR_MARKETS:
+    service = _get_rrg_service()
+    available_scopes = service.available_scopes_for_market(normalized_market)
+    if scope not in available_scopes:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Unsupported RRG scope 'sectors' for market '{market}'. "
-                f"Expected one of: {', '.join(SUPPORTED_RRG_SECTOR_MARKETS)}."
+                f"Unsupported RRG scope '{scope}' for market '{market}'. "
+                f"Expected one of: {', '.join(available_scopes)}."
             ),
         )
-    service = _get_rrg_service()
     payload = service.get_rrg(
         db, market=normalized_market, scope=scope, tail_weeks=tail_weeks
     )

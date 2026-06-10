@@ -16,6 +16,7 @@ import app.services.static_site_export_service as export_module
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun, FeatureRunPointer
 from app.models.stock import StockPrice
+from app.services.static_groups_rrg_export import StaticGroupsRRGPayloadBuilder
 from app.services.static_site_export_service import (
     NoPublishedStaticMarketArtifact,
     STATIC_DEFAULT_SCAN_FILTERS_BY_MARKET,
@@ -1710,12 +1711,9 @@ def test_build_groups_payload_requires_target_date(service_and_session_factory, 
 
 
 def test_build_groups_rrg_payload_emits_available_scopes(service_and_session_factory, monkeypatch):
-    service, session_factory = service_and_session_factory
+    _service, session_factory = service_and_session_factory
 
     class _FakeRRGService:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            self.kwargs = kwargs
-
         def get_rrg_scopes(self, db, *, market, scopes):  # noqa: ARG002
             assert market == "HK"
             assert scopes == ("groups", "sectors")
@@ -1745,11 +1743,18 @@ def test_build_groups_rrg_payload_emits_available_scopes(service_and_session_fac
                 },
             }
 
-    monkeypatch.setattr(export_module, "RRGService", _FakeRRGService)
-    monkeypatch.setattr(export_module, "get_group_rank_service", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        StaticGroupsRRGPayloadBuilder,
+        "_preflight_tables",
+        lambda self, db, market: None,  # noqa: ARG005
+    )
+    builder = StaticGroupsRRGPayloadBuilder(
+        schema_version=STATIC_SITE_SCHEMA_VERSION,
+        rrg_service=_FakeRRGService(),
+    )
 
     with session_factory() as db:
-        payload = service._build_groups_rrg_payload(  # noqa: SLF001
+        payload = builder.build(
             db=db,
             generated_at="2026-04-18T22:00:00Z",
             expected_as_of_date=date(2026, 4, 18),
@@ -1766,15 +1771,15 @@ def test_build_groups_rrg_payload_propagates_non_missing_table_sql_errors(
 ):
     service, session_factory = service_and_session_factory
 
-    class _FakeRRGService:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            self.kwargs = kwargs
+    class _FakeBuilder:
+        @classmethod
+        def from_runtime_services(cls, *, schema_version):  # noqa: ARG003
+            return cls()
 
-        def get_rrg_scopes(self, db, *, market, scopes):  # noqa: ARG002
+        def build(self, **kwargs):  # noqa: ANN003
             raise SQLAlchemyError("connection failed")
 
-    monkeypatch.setattr(export_module, "RRGService", _FakeRRGService)
-    monkeypatch.setattr(export_module, "get_group_rank_service", lambda: SimpleNamespace())
+    monkeypatch.setattr(export_module, "StaticGroupsRRGPayloadBuilder", _FakeBuilder)
 
     with session_factory() as db, pytest.raises(SQLAlchemyError, match="connection failed"):
         service._build_groups_rrg_payload(  # noqa: SLF001

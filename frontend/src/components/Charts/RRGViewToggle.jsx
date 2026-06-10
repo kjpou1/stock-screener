@@ -11,7 +11,7 @@ export default function RRGViewToggle({
   scope,
   onScope,
   sx,
-  rrgAvailable = true,
+  rrgAvailable = false,
   availableScopes,
 }) {
   const scopes = normalizeRrgScopes(availableScopes);

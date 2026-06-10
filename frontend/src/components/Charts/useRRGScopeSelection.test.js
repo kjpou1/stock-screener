@@ -47,4 +47,22 @@ describe('useRRGScopeSelection', () => {
     expect(setView).not.toHaveBeenCalled();
     expect(setScope).toHaveBeenCalledWith('groups');
   });
+
+  it('does not infer RRG scopes when availability metadata is missing', () => {
+    const setView = vi.fn();
+    const setScope = vi.fn();
+
+    const { result } = renderHook(() => useRRGScopeSelection({
+      view: 'rrg',
+      scope: 'groups',
+      setView,
+      setScope,
+      rrgAvailable: true,
+      bundle: null,
+    }));
+
+    expect(result.current.availableScopes).toEqual([]);
+    expect(setView).toHaveBeenCalledWith('table');
+    expect(setScope).not.toHaveBeenCalled();
+  });
 });

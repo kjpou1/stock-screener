@@ -15,7 +15,6 @@ from typing import Any
 from urllib.parse import quote
 
 import pandas as pd
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.analysis.patterns.rs_line import blue_dot_series, compute_rs_line
@@ -40,9 +39,10 @@ from app.services.preset_screens import (
     get_preset_chart_symbols,
     resolve_preset_screens_for_defaults,
 )
-from app.services.rrg_service import RRGService
-from app.services.market_group_ranking_service import get_market_group_ranking_service
-from app.services.market_taxonomy_service import get_market_taxonomy_service
+from app.services.static_groups_rrg_export import (
+    StaticGroupsRRGUnavailableError,
+    StaticGroupsRRGPayloadBuilder,
+)
 from app.services.ui_snapshot_service import UISnapshotService
 from app.wiring.bootstrap import (
     get_benchmark_cache,
@@ -83,23 +83,6 @@ STATIC_DEFAULT_SCAN_FILTERS_BY_MARKET: dict[str, dict[str, int | None]] = {
     "MY": {"minVolume":   4_500_000},      # ~USD 1M @ MYR 4.5
 }
 STATIC_DEFAULT_SCAN_FILTERS_FALLBACK: dict[str, int | None] = {"minVolume": None}
-
-
-def _is_missing_table_sql_error(exc: SQLAlchemyError) -> bool:
-    parts = [str(exc)]
-    orig = getattr(exc, "orig", None)
-    if orig is not None:
-        parts.append(str(orig))
-    message = " ".join(parts).lower()
-    return any(
-        marker in message
-        for marker in (
-            "no such table",
-            "does not exist",
-            "undefined table",
-            "unknown table",
-        )
-    )
 
 
 STATIC_CHART_PRESET_TOP_N = 200
@@ -562,48 +545,20 @@ class StaticSiteExportService:
         If a lightweight export database lacks the RRG source tables entirely,
         this optional section is reported unavailable without aborting export.
         """
-        service = RRGService(
-            group_rank_service=get_group_rank_service(),
-            market_group_ranking_service=get_market_group_ranking_service(),
-            taxonomy_service=get_market_taxonomy_service(),
-        )
         try:
-            scopes = service.get_rrg_scopes(db, market=market, scopes=("groups", "sectors"))
-        except SQLAlchemyError as exc:
-            if not _is_missing_table_sql_error(exc):
-                raise
-            raise StaticSiteSectionUnavailableError(
-                section=f"{market} rrg",
-                reason="RRG source tables are unavailable for this export database.",
-            ) from exc
-        groups_rrg = scopes["groups"]
-        sectors_rrg = scopes["sectors"]
-        available_scopes = [
-            scope for scope in ("groups", "sectors")
-            if scopes.get(scope, {}).get("groups")
-        ]
-
-        if not groups_rrg.get("groups"):
-            raise StaticSiteSectionUnavailableError(
-                section=f"{market} rrg",
-                reason=(
-                    "No RRG data could be computed (group-rank history is too "
-                    "short or absent for this market)."
-                ),
+            return StaticGroupsRRGPayloadBuilder.from_runtime_services(
+                schema_version=STATIC_SITE_SCHEMA_VERSION
+            ).build(
+                db=db,
+                generated_at=generated_at,
+                expected_as_of_date=expected_as_of_date,
+                market=market,
             )
-
-        return {
-            "schema_version": STATIC_SITE_SCHEMA_VERSION,
-            "generated_at": generated_at,
-            "available": True,
-            "market": market,
-            "as_of_date": groups_rrg.get("date") or expected_as_of_date.isoformat(),
-            "available_scopes": available_scopes,
-            "payload": {
-                "groups": groups_rrg,
-                "sectors": sectors_rrg,
-            },
-        }
+        except StaticGroupsRRGUnavailableError as exc:
+            raise StaticSiteSectionUnavailableError(
+                section=exc.section,
+                reason=exc.reason,
+            ) from exc
 
     def _build_optional_section_payload(
         self,

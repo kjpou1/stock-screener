@@ -1,5 +1,3 @@
-import { marketCapabilityValue } from './marketCapabilities';
-
 export const RRG_SCOPE_LABELS = {
   groups: 'Groups',
   sectors: 'Sectors',
@@ -7,7 +5,7 @@ export const RRG_SCOPE_LABELS = {
 
 export const RRG_SCOPE_ORDER = Object.keys(RRG_SCOPE_LABELS);
 
-export const normalizeRrgScopes = (scopes, fallback = RRG_SCOPE_ORDER) => {
+export const normalizeRrgScopes = (scopes, fallback = []) => {
   const source = Array.isArray(scopes) ? scopes : fallback;
   const seen = new Set();
   return source.filter((scope) => {
@@ -35,18 +33,8 @@ export const availableRrgScopesFromBundle = (bundle) => {
 };
 
 export const rrgScopesForMarket = (marketCatalog, market) => {
-  const groupCapable = marketCapabilityValue(marketCatalog, market, 'rrg_groups');
-  const sectorCapable = marketCapabilityValue(marketCatalog, market, 'rrg_sectors');
-  if (groupCapable === null && sectorCapable === null) {
-    return RRG_SCOPE_ORDER;
-  }
-
-  const scopes = [];
-  if (groupCapable) {
-    scopes.push('groups');
-  }
-  if (sectorCapable) {
-    scopes.push('sectors');
-  }
-  return scopes;
+  const entry = (marketCatalog?.markets ?? []).find(
+    (item) => item.code === String(market ?? '').trim().toUpperCase(),
+  );
+  return normalizeRrgScopes(entry?.capabilities?.rrg_scopes);
 };

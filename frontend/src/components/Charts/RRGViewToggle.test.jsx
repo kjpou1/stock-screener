@@ -22,6 +22,7 @@ describe('RRGViewToggle', () => {
         onView={vi.fn()}
         scope="groups"
         onScope={vi.fn()}
+        rrgAvailable
         availableScopes={['groups']}
       />,
     );
@@ -40,6 +41,7 @@ describe('RRGViewToggle', () => {
         onView={vi.fn()}
         scope="groups"
         onScope={onScope}
+        rrgAvailable
         availableScopes={['groups', 'sectors']}
       />,
     );

@@ -7,7 +7,7 @@ export function useRRGScopeSelection({
   scope,
   setView,
   setScope,
-  rrgAvailable = true,
+  rrgAvailable = false,
   availableScopes,
   bundle,
 }) {
@@ -16,7 +16,7 @@ export function useRRGScopeSelection({
     if (!rrgAvailable) {
       return [];
     }
-    return normalizeRrgScopes(availableScopes);
+    return normalizeRrgScopes(availableScopes, []);
   }, [availableScopes, rrgAvailable]);
   const resolvedScopes = useMemo(() => {
     if (!rrgAvailable) {
