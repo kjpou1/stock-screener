@@ -15,6 +15,7 @@ from app.models.provider_snapshot import (
 )
 from app.models.stock import StockFundamental, StockPrice
 from app.services.bootstrap_cache_coverage import (
+    BootstrapPriceCoverageReport,
     evaluate_bootstrap_cache_coverage,
     evaluate_bootstrap_price_cache_coverage,
 )
@@ -174,7 +175,9 @@ def test_bootstrap_price_cache_coverage_ignores_fundamentals_before_later_bootst
         as_of_date=as_of,
     )
 
+    assert isinstance(report, BootstrapPriceCoverageReport)
     assert report["eligible"] is True
+    assert report.to_dict()["mode"] == "price_ready"
     assert report["price_coverage_ratio"] == 0.95
     assert report["price_covered_symbols"] == 19
     assert report["price_missing_symbols"] == 1

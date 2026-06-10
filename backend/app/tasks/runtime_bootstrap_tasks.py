@@ -17,8 +17,7 @@ from ..domain.bootstrap.plan import (
     MarketBootstrapPlan,
     build_bootstrap_plan,
 )
-from ..services.bootstrap_price_readiness import evaluate_bootstrap_price_readiness
-from ..services.cache.price_cache_warmup import evaluate_warmup_metadata
+from ..services.bootstrap_price_readiness import evaluate_bootstrap_price_warmup_wait
 from ..services.market_activity_service import (
     mark_current_market_activity_failed,
     mark_market_activity_completed,
@@ -173,55 +172,6 @@ def _queue_for_stage(stage) -> str:
     raise ValueError(f"Unsupported bootstrap queue kind: {stage.queue_kind}")
 
 
-def _coverage_int(report: dict, key: str) -> int:
-    value = report.get(key)
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _coverage_ratio(report: dict) -> float:
-    value = report.get("price_coverage_ratio")
-    try:
-        return float(value or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _coverage_threshold(report: dict) -> float:
-    value = report.get("threshold")
-    try:
-        return float(value or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _bootstrap_price_coverage_wait_message(
-    report: dict,
-    *,
-    warmup_summary: str,
-) -> str:
-    covered = _coverage_int(report, "price_covered_symbols")
-    total = _coverage_int(report, "price_total_symbols")
-    return (
-        f"Waiting for price cache coverage: {covered}/{total} "
-        f"({_coverage_ratio(report):.1%}, threshold={_coverage_threshold(report):.1%}; "
-        f"warmup={warmup_summary})"
-    )
-
-
-def _bootstrap_price_coverage_wait_reason(market: str, report: dict) -> str:
-    covered = _coverage_int(report, "price_covered_symbols")
-    total = _coverage_int(report, "price_total_symbols")
-    missing = _coverage_int(report, "price_missing_symbols")
-    return (
-        f"Price cache coverage incomplete for {market}: {covered}/{total} "
-        f"({_coverage_ratio(report):.1%}, threshold={_coverage_threshold(report):.1%}, "
-        f"missing={missing})"
-    )
-
-
 def _build_market_bootstrap_signatures(market_plan: MarketBootstrapPlan) -> list:
     from app.interfaces.tasks.feature_store_tasks import build_daily_snapshot
     from app.tasks.breadth_tasks import calculate_daily_breadth_with_gapfill
@@ -278,17 +228,17 @@ def wait_for_bootstrap_price_warmup(
     db = SessionLocal()
     try:
         warmup_metadata = get_price_cache().get_warmup_metadata(market=market_code)
-        warmup_readiness = evaluate_warmup_metadata(
-            warmup_metadata,
-            context="bootstrap price run",
-        )
         as_of_date = get_market_calendar_service().last_completed_trading_day(market_code)
-        coverage_report = evaluate_bootstrap_price_readiness(
+        retries = getattr(getattr(self, "request", None), "retries", 0) or 0
+        decision = evaluate_bootstrap_price_warmup_wait(
             db,
             market=market_code,
             as_of_date=as_of_date,
+            warmup_metadata=warmup_metadata,
+            retries=retries,
+            max_retries=BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES,
         )
-        if coverage_report.get("eligible"):
+        if decision.ready:
             mark_market_activity_completed(
                 db,
                 market=market_code,
@@ -298,16 +248,9 @@ def wait_for_bootstrap_price_warmup(
                 task_id=task_id,
                 message="Price cache coverage ready",
             )
-            return {
-                "status": "ready",
-                "market": market_code,
-                "warmup": warmup_metadata,
-                "coverage": coverage_report,
-            }
+            return decision.ready_payload()
 
-        retries = getattr(getattr(self, "request", None), "retries", 0) or 0
-        wait_reason = _bootstrap_price_coverage_wait_reason(market_code, coverage_report)
-        if retries >= BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES:
+        if decision.exhausted:
             mark_market_activity_failed(
                 db,
                 market=market_code,
@@ -315,9 +258,9 @@ def wait_for_bootstrap_price_warmup(
                 lifecycle=lifecycle,
                 task_name=task_name,
                 task_id=task_id,
-                message=f"Price cache warmup unavailable: {wait_reason}",
+                message=f"Price cache warmup unavailable: {decision.failure_reason}",
             )
-            raise RuntimeError(wait_reason)
+            raise RuntimeError(decision.failure_reason)
 
         mark_market_activity_progress(
             db,
@@ -326,17 +269,15 @@ def wait_for_bootstrap_price_warmup(
             lifecycle=lifecycle,
             task_name=task_name,
             task_id=task_id,
-            percent=round(_coverage_ratio(coverage_report) * 100, 4),
-            current=_coverage_int(coverage_report, "price_covered_symbols"),
-            total=_coverage_int(coverage_report, "price_total_symbols"),
-            message=_bootstrap_price_coverage_wait_message(
-                coverage_report,
-                warmup_summary=warmup_readiness.summary,
-            ),
+            percent=decision.progress_percent,
+            current=decision.current,
+            total=decision.total,
+            message=decision.retry_message,
         )
         raise self.retry(
             exc=RuntimeError(
-                f"waiting_for_bootstrap_price_coverage:{market_code}: {wait_reason}"
+                f"waiting_for_bootstrap_price_coverage:{market_code}: "
+                f"{decision.failure_reason}"
             ),
             countdown=BOOTSTRAP_PRICE_WARMUP_RETRY_COUNTDOWN_SECONDS,
             max_retries=BOOTSTRAP_PRICE_WARMUP_MAX_RETRIES,

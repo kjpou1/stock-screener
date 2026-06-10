@@ -17,6 +17,8 @@ from app.scripts.repair_jp_alpha_universe_symbols import (
 
 
 def _session():
+    from app import models  # noqa: F401 - register all repair targets on metadata
+
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)()
@@ -91,3 +93,73 @@ def test_repair_jp_alpha_universe_symbols_renames_symbol_keyed_rows():
     ]
     assert session.query(ThemeMention).one().tickers == ["335A.T", "7203.T"]
     assert session.query(ThemeAlert).one().related_tickers == ["335A.T"]
+
+
+def test_repair_jp_alpha_universe_symbols_skips_unique_target_conflicts():
+    session = _session()
+    session.add(
+        StockUniverse(
+            symbol="0335.T",
+            name="Mirairo Inc.",
+            market="JP",
+            exchange="XTKS",
+            local_code="0335",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        )
+    )
+    session.add(StockPrice(symbol="0335.T", date=date(2026, 6, 8), close=363.0))
+    session.add(StockPrice(symbol="335A.T", date=date(2026, 6, 8), close=365.0))
+    session.commit()
+
+    stats = repair_jp_alpha_universe_symbols(
+        session,
+        candidate_symbols=["335A.T"],
+        dry_run=False,
+    )
+
+    assert stats["renamed"] == 0
+    assert stats["skipped"] == [
+        {
+            "symbol": "0335.T",
+            "reason": "target_conflict:stock_prices",
+            "target": "335A.T",
+        }
+    ]
+    assert session.query(StockUniverse).filter_by(symbol="0335.T").count() == 1
+    assert session.query(StockPrice).filter_by(symbol="0335.T").count() == 1
+    assert session.query(StockPrice).filter_by(symbol="335A.T").count() == 1
+
+
+def test_repair_jp_alpha_universe_symbols_candidate_csv_does_not_fetch_default_source(
+    tmp_path,
+):
+    class ExplodingSource:
+        def fetch_market_snapshot(self, market):
+            raise AssertionError(f"unexpected source fetch for {market}")
+
+    session = _session()
+    session.add(
+        StockUniverse(
+            symbol="0335.T",
+            name="Mirairo Inc.",
+            market="JP",
+            exchange="XTKS",
+            local_code="0335",
+            is_active=True,
+            status=UNIVERSE_STATUS_ACTIVE,
+        )
+    )
+    session.commit()
+    candidate_csv = tmp_path / "jp_candidates.csv"
+    candidate_csv.write_text("symbol\n335A.T\n", encoding="utf-8")
+
+    stats = repair_jp_alpha_universe_symbols(
+        session,
+        candidate_csv=candidate_csv,
+        candidate_source_service=ExplodingSource(),
+        dry_run=True,
+    )
+
+    assert stats["planned"] == 1
+    assert stats["repairs"] == [{"from": "0335.T", "to": "335A.T"}]

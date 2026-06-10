@@ -40,11 +40,30 @@ def _patch_price_barrier_dependencies(
         "app.wiring.bootstrap.get_market_calendar_service",
         lambda: _FakeCalendarService(),
     )
+    from app.services import bootstrap_price_readiness as readiness
+
     monkeypatch.setattr(
-        module,
+        readiness,
         "evaluate_bootstrap_price_readiness",
-        lambda _db, *, market, as_of_date: coverage_report,
-        raising=False,
+        lambda _db, *, market, as_of_date: _readiness_report_from_mapping(
+            coverage_report,
+            market=market,
+            as_of_date=as_of_date,
+        ),
+    )
+
+
+def _readiness_report_from_mapping(payload, *, market, as_of_date):
+    from app.services.bootstrap_price_readiness import BootstrapPriceReadinessReport
+
+    missing_count = int(payload.get("price_missing_symbols") or 0)
+    return BootstrapPriceReadinessReport(
+        market=market,
+        threshold=float(payload.get("threshold") or 0.95),
+        price_coverage_date=as_of_date,
+        price_total_symbols=int(payload.get("price_total_symbols") or 0),
+        price_covered_symbols=int(payload.get("price_covered_symbols") or 0),
+        price_missing_symbols=tuple(f"MISSING{i}" for i in range(missing_count)),
     )
 
 
@@ -250,3 +269,48 @@ def test_wait_for_bootstrap_price_warmup_marks_failed_when_retries_exhausted(
         }
     ]
     assert session.closed is True
+
+
+def test_bootstrap_price_warmup_wait_decision_owns_progress_and_messages(monkeypatch):
+    from app.services import bootstrap_price_readiness as readiness
+
+    monkeypatch.setattr(
+        readiness,
+        "evaluate_bootstrap_price_readiness",
+        lambda _db, *, market, as_of_date: readiness.BootstrapPriceReadinessReport(
+            market=market,
+            threshold=0.95,
+            price_coverage_date=as_of_date,
+            price_total_symbols=31,
+            price_covered_symbols=19,
+            price_missing_symbols=("A.T", "B.T"),
+            unsupported_symbols=("0335.T",),
+        ),
+    )
+
+    decision = readiness.evaluate_bootstrap_price_warmup_wait(
+        object(),
+        market="HK",
+        as_of_date=date(2026, 6, 8),
+        warmup_metadata={
+            "status": "completed",
+            "count": 31,
+            "total": 31,
+            "completed_at": "2026-06-09T08:00:00",
+        },
+        retries=0,
+        max_retries=120,
+    )
+
+    assert decision.status == "waiting"
+    assert decision.progress_percent == pytest.approx(61.2903)
+    assert decision.current == 19
+    assert decision.total == 31
+    assert decision.retry_message == (
+        "Waiting for price cache coverage: 19/31 "
+        "(61.3%, threshold=95.0%; warmup=completed, 31/31)"
+    )
+    assert decision.failure_reason == (
+        "Price cache coverage incomplete for HK: 19/31 "
+        "(61.3%, threshold=95.0%, missing=2)"
+    )
