@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -35,7 +35,7 @@ describe('RRGViewToggle', () => {
   it('renders only available scopes and reports scope changes', async () => {
     const onScope = vi.fn();
     const user = userEvent.setup();
-    render(
+    renderWithProviders(
       <RRGViewToggle
         view="rrg"
         onView={vi.fn()}

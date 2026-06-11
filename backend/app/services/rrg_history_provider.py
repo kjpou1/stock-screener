@@ -81,7 +81,7 @@ class MarketDispatchRRGHistoryProvider:
     ) -> None:
         self._us_provider = us_provider
         self._non_us_provider = non_us_provider
-        self._us_market = us_market
+        self._us_market = str(us_market or "").upper()
 
     def get_all_groups_history(
         self,

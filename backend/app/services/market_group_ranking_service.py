@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from datetime import date, timedelta
+import logging
+import pickle
 from typing import Any, TypeAlias
 
 import pandas as pd
@@ -13,6 +15,9 @@ from sqlalchemy.orm import Session
 from app.domain.common.query import FilterSpec, SortOrder, SortSpec
 from app.infra.db.models.feature_store import FeatureRun
 from app.infra.db.repositories.feature_store_repo import SqlFeatureStoreRepository
+from app.services.redis_pool import get_redis_client
+
+logger = logging.getLogger(__name__)
 
 GROUP_CHANGE_OFFSETS = {
     "1w": 5,
@@ -26,17 +31,23 @@ GroupRankingHistoryResult: TypeAlias = tuple[
     dict[str, dict[str, Any]],
     dict[str, list[tuple[date, float, int]]],
 ]
+RRG_HISTORY_CACHE_TTL_SECONDS = 604800
+_REDIS_CLIENT_UNSET = object()
 
 
 class MarketGroupRankingService:
     """Read-only group ranking service for non-US markets."""
 
-    def __init__(self, *, rrg_history_cache_entries: int = 32) -> None:
-        self._rrg_history_cache_entries = rrg_history_cache_entries
-        self._rrg_history_cache: OrderedDict[
-            tuple[int, str, int, int],
-            GroupRankingHistoryResult,
-        ] = OrderedDict()
+    def __init__(
+        self,
+        *,
+        redis_client: Any = _REDIS_CLIENT_UNSET,
+        rrg_history_cache_ttl_seconds: int = RRG_HISTORY_CACHE_TTL_SECONDS,
+    ) -> None:
+        self._redis_client = (
+            get_redis_client() if redis_client is _REDIS_CLIENT_UNSET else redis_client
+        )
+        self._rrg_history_cache_ttl_seconds = int(rrg_history_cache_ttl_seconds)
 
     def get_all_groups_history(
         self,
@@ -51,15 +62,14 @@ class MarketGroupRankingService:
         if latest_run is None:
             return None, {}, {}
 
-        cache_key = (
-            self._db_bind_identity(db),
-            normalized_market,
-            int(days),
-            int(latest_run.id),
+        cache_key = self._rrg_history_cache_key(
+            db,
+            market=normalized_market,
+            days=days,
+            latest_run_id=int(latest_run.id),
         )
-        cached = self._rrg_history_cache.get(cache_key)
+        cached = self._get_cached_rrg_history(cache_key)
         if cached is not None:
-            self._rrg_history_cache.move_to_end(cache_key)
             return cached
 
         result = self._build_rrg_history_result(
@@ -68,11 +78,36 @@ class MarketGroupRankingService:
             days=days,
             latest_run=latest_run,
         )
-        self._rrg_history_cache[cache_key] = result
-        self._rrg_history_cache.move_to_end(cache_key)
-        while len(self._rrg_history_cache) > self._rrg_history_cache_entries:
-            self._rrg_history_cache.popitem(last=False)
+        self._store_cached_rrg_history(cache_key, result)
         return result
+
+    def _get_cached_rrg_history(self, cache_key: str) -> GroupRankingHistoryResult | None:
+        if not self._redis_client:
+            return None
+        try:
+            cached_bytes = self._redis_client.get(cache_key)
+            if not cached_bytes:
+                return None
+            return pickle.loads(cached_bytes)
+        except Exception as exc:
+            logger.warning("Error reading RRG history cache from Redis: %s", exc)
+            return None
+
+    def _store_cached_rrg_history(
+        self,
+        cache_key: str,
+        result: GroupRankingHistoryResult,
+    ) -> None:
+        if not self._redis_client or self._rrg_history_cache_ttl_seconds <= 0:
+            return
+        try:
+            self._redis_client.setex(
+                cache_key,
+                self._rrg_history_cache_ttl_seconds,
+                pickle.dumps(result),
+            )
+        except Exception as exc:
+            logger.warning("Error storing RRG history cache in Redis: %s", exc)
 
     def get_current_rankings(
         self,
@@ -540,15 +575,41 @@ class MarketGroupRankingService:
     def _group_rank_map(rankings: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         return {str(row["industry_group"]): row for row in rankings if row.get("industry_group")}
 
+    def _rrg_history_cache_key(
+        self,
+        db: Session,
+        *,
+        market: str,
+        days: int,
+        latest_run_id: int,
+    ) -> str:
+        return (
+            "rrg_history:"
+            f"{self._db_bind_identity(db)}:"
+            f"{market}:"
+            f"{int(days)}:"
+            f"{int(latest_run_id)}"
+        )
+
     @staticmethod
-    def _db_bind_identity(db: Session) -> int:
+    def _db_bind_identity(db: Session) -> str:
         get_bind = getattr(db, "get_bind", None)
         if callable(get_bind):
             try:
-                return id(get_bind())
+                bind = get_bind()
+                url = getattr(bind, "url", None)
+                if url is not None:
+                    render = getattr(url, "render_as_string", None)
+                    if callable(render):
+                        try:
+                            return str(render(hide_password=True))
+                        except TypeError:
+                            return str(render())
+                    return str(url)
+                return f"bind:{id(bind)}"
             except SQLAlchemyError:
-                return id(db)
-        return id(db)
+                return f"session:{id(db)}"
+        return f"session:{id(db)}"
 
 
 _market_group_ranking_service: MarketGroupRankingService | None = None

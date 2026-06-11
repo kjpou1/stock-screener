@@ -358,6 +358,55 @@ async def test_get_rrg_scopes_returns_bundle_with_available_scopes(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_get_rrg_scopes_returns_sector_only_bundle(monkeypatch, client):
+    from app.services import server_auth
+
+    monkeypatch.setattr(server_auth.settings, "server_auth_enabled", False)
+
+    class _FakeRRGService:
+        def available_scopes_for_market(self, market):
+            assert market == "HK"
+            return ("sectors",)
+
+        def get_rrg_scopes(self, db, *, market, scopes, tail_weeks=8, lookback_days=400):  # noqa: ARG002
+            assert market == "HK"
+            assert scopes == ("sectors",)
+            return {
+                "sectors": {
+                    "date": "2026-04-18",
+                    "market": "HK",
+                    "scope": "sectors",
+                    "groups": [
+                        {
+                            "industry_group": "Information Technology",
+                            "rank": 1,
+                            "num_stocks": 21,
+                            "avg_rs_rating": 84.0,
+                            "quadrant": "Leading",
+                            "is_provisional": False,
+                            "current": {"date": "2026-04-12", "x": 104.0, "y": 103.0},
+                            "tail": [{"date": "2026-04-12", "x": 104.0, "y": 103.0}],
+                        }
+                    ],
+                },
+            }
+
+    monkeypatch.setattr(
+        "app.api.v1.groups._get_rrg_service",
+        lambda: _FakeRRGService(),
+    )
+
+    response = await client.get("/api/v1/groups/rrg/scopes", params={"market": "HK"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["date"] == "2026-04-18"
+    assert payload["available_scopes"] == ["sectors"]
+    assert set(payload["payload"]) == {"sectors"}
+    assert payload["payload"]["sectors"]["total_groups"] == 1
+
+
+@pytest.mark.asyncio
 async def test_get_rrg_scopes_requests_only_market_supported_scopes(monkeypatch, client):
     from app.services import server_auth
 

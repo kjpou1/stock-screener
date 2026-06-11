@@ -3,7 +3,7 @@ export const RRG_SCOPE_LABELS = {
   sectors: 'Sectors',
 };
 
-export const RRG_SCOPE_ORDER = Object.keys(RRG_SCOPE_LABELS);
+export const RRG_SCOPE_ORDER = ['groups', 'sectors'];
 
 export const normalizeRrgScopes = (scopes, fallback = []) => {
   const source = Array.isArray(scopes) ? scopes : fallback;

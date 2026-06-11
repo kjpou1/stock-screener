@@ -5,10 +5,9 @@ Provides access to current and historical group rankings,
 rank movers, and manual calculation triggers.
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
-from typing import List
 
 from ...config import settings
 from ...database import get_db
@@ -25,7 +24,6 @@ from ...schemas.groups import (
     CalculationResponse,
     CalculationStatusResponse,
     BackfillRequest,
-    BackfillResponse,
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...domain.analytics.scope import market_scope_tag
@@ -184,6 +182,10 @@ def _build_rrg_response(
     )
 
 
+def _rrg_scope_has_data(payload: dict | None) -> bool:
+    return bool((payload or {}).get("groups"))
+
+
 @router.get("/rrg/scopes", response_model=RRGBundleResponse)
 async def get_rrg_scopes(
     tail_weeks: int = Query(8, ge=2, le=20, description="Number of weekly tail points"),
@@ -201,7 +203,7 @@ async def get_rrg_scopes(
         scopes=requested_scopes,
         tail_weeks=tail_weeks,
     )
-    if not (scopes.get("groups") or {}).get("groups"):
+    if not any(_rrg_scope_has_data(scopes.get(scope)) for scope in requested_scopes):
         raise HTTPException(
             status_code=404,
             detail=(
@@ -224,9 +226,10 @@ async def get_rrg_scopes(
         scope for scope in requested_scopes
         if responses.get(scope) and responses[scope].total_groups > 0
     ]
+    primary_scope = available_scopes[0] if available_scopes else next(iter(responses))
 
     return RRGBundleResponse(
-        date=responses["groups"].date,
+        date=responses[primary_scope].date,
         market=normalized_market,
         tail_weeks=tail_weeks,
         available_scopes=available_scopes,
@@ -550,7 +553,7 @@ async def trigger_backfill(
     if (end - start) > max_range:
         raise HTTPException(
             status_code=400,
-            detail=f"Backfill range cannot exceed 1 year (365 days)"
+            detail="Backfill range cannot exceed 1 year (365 days)"
         )
 
     # Dispatch to Celery (non-blocking)

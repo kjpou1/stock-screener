@@ -9,7 +9,24 @@ from sqlalchemy.orm import Session
 from app.database import Base
 from app.infra.db.models.feature_store import FeatureRun
 from app.services.market_group_ranking_service import MarketGroupRankingService
-from app.services.rrg_history_provider import build_rrg_history_provider
+from app.services.rrg_history_provider import (
+    MarketDispatchRRGHistoryProvider,
+    build_rrg_history_provider,
+)
+
+
+class _FakeRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, bytes] = {}
+        self.set_calls: list[tuple[str, int]] = []
+
+    def get(self, key: str) -> bytes | None:
+        return self.values.get(key)
+
+    def setex(self, key: str, ttl_seconds: int, value: bytes) -> bool:
+        self.set_calls.append((key, ttl_seconds))
+        self.values[key] = value
+        return True
 
 
 def test_get_rank_movers_separates_gainers_and_losers(monkeypatch):
@@ -122,7 +139,8 @@ def test_get_current_rank_map_skips_historical_rank_change_work(monkeypatch):
 
 
 def test_market_group_ranking_service_loads_rrg_runs_once_and_returns_ascending_series(monkeypatch):
-    service = MarketGroupRankingService()
+    fake_redis = _FakeRedis()
+    service = MarketGroupRankingService(redis_client=fake_redis)
     latest_run = SimpleNamespace(id=3, as_of_date=date(2026, 4, 3))
     middle_run = SimpleNamespace(id=2, as_of_date=date(2026, 4, 2))
     oldest_run = SimpleNamespace(id=1, as_of_date=date(2026, 4, 1))
@@ -191,6 +209,7 @@ def test_market_group_ranking_service_loads_rrg_runs_once_and_returns_ascending_
         series,
     )
     assert load_calls == [3, 2, 1]
+    assert len(fake_redis.set_calls) == 1
 
 
 def test_rrg_history_dispatcher_uses_market_group_service_directly_for_non_us():
@@ -216,3 +235,28 @@ def test_rrg_history_dispatcher_uses_market_group_service_directly_for_non_us():
         {},
     )
     assert calls == [("HK", 400)]
+
+
+def test_rrg_history_dispatcher_normalizes_configured_us_market():
+    calls: list[str] = []
+
+    class _Provider:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def get_all_groups_history(self, db, *, market, days):  # noqa: ANN001, ARG002
+            calls.append(self.name)
+            return "2026-04-03", {}, {}
+
+    provider = MarketDispatchRRGHistoryProvider(
+        us_provider=_Provider("us"),
+        non_us_provider=_Provider("non_us"),
+        us_market="us",
+    )
+
+    assert provider.get_all_groups_history(Session(), market="US", days=400) == (
+        "2026-04-03",
+        {},
+        {},
+    )
+    assert calls == ["us"]
