@@ -12,12 +12,14 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models.industry import IBDGroupRank, IBDIndustryGroup
 from app.models.stock_universe import StockUniverse
+from app.services.rrg_history_provider import USGroupRankHistoryProvider
 from app.services.rrg_service import RRGService
 
 
@@ -58,6 +60,18 @@ class _StubRankService:
         return [r for r in self._rows if r["market"] == market][:limit]
 
 
+class _ExplodingRankService:
+    def get_current_rankings(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("US IBDGroupRankService path should not be used")
+
+
+def _service_for_rank_rows(rows, **kwargs):
+    return RRGService(
+        history_provider=USGroupRankHistoryProvider(_StubRankService(rows)),
+        **kwargs,
+    )
+
+
 def test_get_rrg_groups_scope_returns_quadrants_and_tails():
     session = _session()
     dates = _weekly_fridays(40)
@@ -73,7 +87,9 @@ def test_get_rrg_groups_scope_returns_quadrants_and_tails():
         {"market": "US", "industry_group": "BetaMetals", "date": latest,
          "rank": 2, "num_stocks": 8, "avg_rs_rating": 36.0},
     ])
-    payload = RRGService(group_rank_service=stub).get_rrg(session, market="US")
+    payload = RRGService(
+        history_provider=USGroupRankHistoryProvider(stub)
+    ).get_rrg(session, market="US")
 
     assert payload["date"] == latest
     assert payload["scope"] == "groups"
@@ -106,7 +122,9 @@ def test_get_rrg_omits_groups_with_too_little_history():
         {"market": "US", "industry_group": "TinyNew", "date": latest,
          "rank": 2, "num_stocks": 3, "avg_rs_rating": 50.0},
     ])
-    payload = RRGService(group_rank_service=stub).get_rrg(session, market="US")
+    payload = RRGService(
+        history_provider=USGroupRankHistoryProvider(stub)
+    ).get_rrg(session, market="US")
     assert [g["industry_group"] for g in payload["groups"]] == ["AlphaTech"]
 
 
@@ -139,7 +157,7 @@ def test_get_rrg_sectors_scope_rolls_groups_into_gics_sectors():
         {"market": "US", "industry_group": "BetaMetals", "date": latest,
          "rank": 3, "num_stocks": 10, "avg_rs_rating": 36.0},
     ])
-    payload = RRGService(group_rank_service=stub).get_rrg(
+    payload = RRGService(history_provider=USGroupRankHistoryProvider(stub)).get_rrg(
         session, market="US", scope="sectors"
     )
 
@@ -159,7 +177,149 @@ def test_get_group_sector_map_majority_vote():
         session.add(StockUniverse(symbol=sym, market="US", sector=sector))
     session.commit()
 
-    mapping = RRGService(group_rank_service=_StubRankService([])).get_group_sector_map(
+    mapping = _service_for_rank_rows([]).get_group_sector_map(
         session, market="US"
     )
     assert mapping["AlphaTech"] == "Technology"  # 2 vs 1
+
+
+def test_get_rrg_non_us_uses_feature_run_history_provider():
+    session = _session()
+    dates = _weekly_fridays(40)
+
+    class _FakeHistoryProvider:
+        def get_all_groups_history(self, db, *, market, days):  # noqa: ARG002
+            assert market == "HK"
+            latest = dates[-1].isoformat()
+            return (
+                latest,
+                {
+                    "Internet Services": {
+                        "industry_group": "Internet Services",
+                        "date": latest,
+                        "rank": 1,
+                        "num_stocks": 9,
+                        "avg_rs_rating": 80.0,
+                    }
+                },
+                {
+                    "Internet Services": [
+                        (d, 40.0 + index, 9)
+                        for index, d in enumerate(dates)
+                    ]
+                },
+            )
+
+    payload = RRGService(history_provider=_FakeHistoryProvider()).get_rrg(
+        session, market="HK"
+    )
+
+    assert payload["market"] == "HK"
+    assert [g["industry_group"] for g in payload["groups"]] == ["Internet Services"]
+
+
+def test_get_rrg_uses_injected_history_provider_for_all_markets():
+    session = _session()
+    dates = _weekly_fridays(40)
+    calls: list[tuple[str, int]] = []
+
+    class _FakeHistoryProvider:
+        def get_all_groups_history(self, db, *, market, days):  # noqa: ARG002
+            calls.append((market, days))
+            latest = dates[-1].isoformat()
+            return (
+                latest,
+                {
+                    "Internet Services": {
+                        "industry_group": "Internet Services",
+                        "date": latest,
+                        "rank": 1,
+                        "num_stocks": 9,
+                        "avg_rs_rating": 80.0,
+                    }
+                },
+                {
+                    "Internet Services": [
+                        (d, 40.0 + index, 9)
+                        for index, d in enumerate(dates)
+                    ]
+                },
+            )
+
+    payload = RRGService(
+        history_provider=_FakeHistoryProvider(),
+    ).get_rrg(session, market="HK", lookback_days=123)
+
+    assert calls == [("HK", 123)]
+    assert [group["industry_group"] for group in payload["groups"]] == ["Internet Services"]
+
+
+def test_get_rrg_rejects_unknown_scope_at_service_boundary():
+    session = _session()
+
+    class _FakeHistoryProvider:
+        def get_all_groups_history(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("unknown scopes should fail before loading history")
+
+    with pytest.raises(ValueError, match="Unsupported RRG scope"):
+        RRGService(history_provider=_FakeHistoryProvider()).get_rrg(
+            session,
+            market="US",
+            scope="bogus",
+        )
+
+
+def test_get_rrg_disabled_non_us_market_returns_empty_without_history_lookup():
+    session = _session()
+
+    class _FakeHistoryProvider:
+        def get_all_groups_history(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("disabled RRG markets should not load history")
+
+    payload = RRGService(history_provider=_FakeHistoryProvider()).get_rrg_scopes(
+        session, market="KR", scopes=("groups", "sectors")
+    )
+
+    assert payload["groups"]["groups"] == []
+    assert payload["sectors"]["groups"] == []
+
+
+def test_get_group_sector_map_uses_taxonomy_for_curated_rrg_market():
+    session = _session()
+
+    class _FakeTaxonomyService:
+        def sector_map_for_market(self, market):
+            assert market == "HK"
+            return {"Internet Services": "Information Technology"}
+
+    mapping = RRGService(
+        history_provider=USGroupRankHistoryProvider(_StubRankService([])),
+        taxonomy_service=_FakeTaxonomyService(),
+    ).get_group_sector_map(session, market="HK")
+
+    assert mapping == {"Internet Services": "Information Technology"}
+
+
+def test_non_us_sector_map_does_not_fall_back_to_us_stock_universe_join():
+    session = _session()
+    session.add(
+        IBDIndustryGroup(
+            symbol="0700.HK",
+            industry_group="Internet Services",
+            market="HK",
+        )
+    )
+    session.add(StockUniverse(symbol="0700.HK", market="HK", sector="Technology"))
+    session.commit()
+
+    class _EmptyTaxonomyService:
+        def sector_map_for_market(self, market):
+            assert market == "HK"
+            return {}
+
+    mapping = RRGService(
+        history_provider=USGroupRankHistoryProvider(_StubRankService([])),
+        taxonomy_service=_EmptyTaxonomyService(),
+    ).get_group_sector_map(session, market="HK")
+
+    assert mapping == {}

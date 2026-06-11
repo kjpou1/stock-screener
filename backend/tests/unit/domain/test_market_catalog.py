@@ -49,6 +49,7 @@ def test_au_market_catalog_entry_is_harmonized() -> None:
     assert entry.capabilities.breadth is False
     assert entry.capabilities.fundamentals is True
     assert entry.capabilities.group_rankings is False
+    assert entry.capabilities.rrg_scopes == ()
     assert entry.capabilities.feature_snapshot is True
     assert entry.capabilities.official_universe is True
     assert entry.capabilities.finviz_screening is False
@@ -87,6 +88,19 @@ def test_market_catalog_filters_market_codes_by_capability_in_runtime_order() ->
         "CN",
         "CA",
     )
+    assert catalog.market_codes_with_rrg_scope("groups") == (
+        "US",
+        "HK",
+        "IN",
+        "JP",
+        "TW",
+    )
+    assert catalog.market_codes_with_rrg_scope("sectors") == (
+        "US",
+        "HK",
+        "IN",
+        "JP",
+    )
 
 
 def test_market_catalog_rejects_unknown_capability_filter() -> None:
@@ -94,6 +108,13 @@ def test_market_catalog_rejects_unknown_capability_filter() -> None:
 
     with pytest.raises(MarketCatalogError, match="Unsupported market capability"):
         catalog.market_codes_with_capability("not_a_capability")
+
+
+def test_market_catalog_rejects_unknown_rrg_scope_filter() -> None:
+    catalog = get_market_catalog()
+
+    with pytest.raises(MarketCatalogError, match="Unsupported RRG scope"):
+        catalog.market_codes_with_rrg_scope("not_a_scope")
 
 
 def test_market_catalog_entry_exposes_canonical_mic_and_currency_facts() -> None:
@@ -148,6 +169,7 @@ def test_market_catalog_entry_rejects_mic_facts_outside_declared_mics() -> None:
                 breadth=False,
                 fundamentals=False,
                 group_rankings=False,
+                rrg_scopes=(),
                 feature_snapshot=False,
                 official_universe=False,
                 finviz_screening=False,
@@ -184,6 +206,7 @@ def test_market_catalog_entry_rejects_mic_fact_currency_outside_supported_curren
                 breadth=False,
                 fundamentals=False,
                 group_rankings=False,
+                rrg_scopes=(),
                 feature_snapshot=False,
                 official_universe=False,
                 finviz_screening=False,
@@ -246,6 +269,7 @@ def test_market_catalog_runtime_payload_is_frontend_ready() -> None:
             "breadth": True,
             "fundamentals": True,
             "group_rankings": True,
+            "rrg_scopes": ["groups", "sectors"],
             "feature_snapshot": True,
             "official_universe": False,
             "finviz_screening": True,

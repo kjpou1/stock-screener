@@ -9,6 +9,7 @@ const getGroupsBootstrap = vi.fn();
 const getCurrentRankings = vi.fn();
 const getRankMovers = vi.fn();
 const getGroupDetail = vi.fn();
+const getRRGBundle = vi.fn();
 const triggerCalculation = vi.fn();
 const getCalculationStatus = vi.fn();
 const fetchPriceHistoryBatch = vi.fn();
@@ -21,18 +22,18 @@ const runtimeState = {
   supportedMarkets: ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA', 'DE', 'SG', 'AU', 'MY'],
   marketCatalog: {
     markets: [
-      { code: 'US', label: 'United States', capabilities: { group_rankings: true } },
-      { code: 'HK', label: 'Hong Kong', capabilities: { group_rankings: true } },
-      { code: 'IN', label: 'India', capabilities: { group_rankings: true } },
-      { code: 'JP', label: 'Japan', capabilities: { group_rankings: true } },
-      { code: 'KR', label: 'South Korea', capabilities: { group_rankings: true } },
-      { code: 'TW', label: 'Taiwan', capabilities: { group_rankings: true } },
-      { code: 'CN', label: 'China A-shares', capabilities: { group_rankings: true } },
-      { code: 'CA', label: 'Canada', capabilities: { group_rankings: true } },
-      { code: 'DE', label: 'Germany', capabilities: { group_rankings: false } },
-      { code: 'SG', label: 'Singapore', capabilities: { group_rankings: false } },
-      { code: 'AU', label: 'Australia', capabilities: { group_rankings: false } },
-      { code: 'MY', label: 'Malaysia', capabilities: { group_rankings: false } },
+      { code: 'US', label: 'United States', capabilities: { group_rankings: true, rrg_scopes: ['groups', 'sectors'] } },
+      { code: 'HK', label: 'Hong Kong', capabilities: { group_rankings: true, rrg_scopes: ['groups', 'sectors'] } },
+      { code: 'IN', label: 'India', capabilities: { group_rankings: true, rrg_scopes: ['groups', 'sectors'] } },
+      { code: 'JP', label: 'Japan', capabilities: { group_rankings: true, rrg_scopes: ['groups', 'sectors'] } },
+      { code: 'KR', label: 'South Korea', capabilities: { group_rankings: true, rrg_scopes: [] } },
+      { code: 'TW', label: 'Taiwan', capabilities: { group_rankings: true, rrg_scopes: ['groups'] } },
+      { code: 'CN', label: 'China A-shares', capabilities: { group_rankings: true, rrg_scopes: [] } },
+      { code: 'CA', label: 'Canada', capabilities: { group_rankings: true, rrg_scopes: [] } },
+      { code: 'DE', label: 'Germany', capabilities: { group_rankings: false, rrg_scopes: [] } },
+      { code: 'SG', label: 'Singapore', capabilities: { group_rankings: false, rrg_scopes: [] } },
+      { code: 'AU', label: 'Australia', capabilities: { group_rankings: false, rrg_scopes: [] } },
+      { code: 'MY', label: 'Malaysia', capabilities: { group_rankings: false, rrg_scopes: [] } },
     ],
   },
 };
@@ -42,6 +43,7 @@ vi.mock('../api/groups', () => ({
   getCurrentRankings: (...args) => getCurrentRankings(...args),
   getRankMovers: (...args) => getRankMovers(...args),
   getGroupDetail: (...args) => getGroupDetail(...args),
+  getRRGBundle: (...args) => getRRGBundle(...args),
   triggerCalculation: (...args) => triggerCalculation(...args),
   getCalculationStatus: (...args) => getCalculationStatus(...args),
 }));
@@ -95,6 +97,7 @@ describe('GroupRankingsPage', () => {
     getCurrentRankings.mockReset();
     getRankMovers.mockReset();
     getGroupDetail.mockReset();
+    getRRGBundle.mockReset();
     triggerCalculation.mockReset();
     getCalculationStatus.mockReset();
     fetchPriceHistoryBatch.mockReset();
@@ -121,6 +124,40 @@ describe('GroupRankingsPage', () => {
       history: [],
       stocks: [],
     });
+    getRRGBundle.mockImplementation(async (tailWeeks = 8, _limit = 197, market = 'US') => ({
+      date: '2026-04-18',
+      market,
+      tail_weeks: tailWeeks,
+      available_scopes: ['groups'],
+      payload: {
+        groups: {
+          date: '2026-04-18',
+          market,
+          scope: 'groups',
+          groups: [
+            {
+              industry_group: `${market} Internet Services`,
+              rank: 3,
+              num_stocks: 7,
+              avg_rs_rating: 82.1,
+              quadrant: 'Leading',
+              is_provisional: false,
+              current: { date: '2026-04-18', x: 105.5, y: 103.2 },
+              tail: [
+                { date: '2026-04-11', x: 103.5, y: 101.1 },
+                { date: '2026-04-18', x: 105.5, y: 103.2 },
+              ],
+            },
+          ],
+        },
+        sectors: {
+          date: '2026-04-18',
+          market,
+          scope: 'sectors',
+          groups: [],
+        },
+      },
+    }));
     getCalculationStatus.mockResolvedValue({ status: 'queued' });
   });
 
@@ -187,6 +224,32 @@ describe('GroupRankingsPage', () => {
     expect(getCurrentRankings).not.toHaveBeenCalledWith(197, 'AU');
     expect(screen.getByRole('button', { name: 'US' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'AU' })).not.toBeInTheDocument();
+  });
+
+  it('loads bundled RRG scopes and hides unavailable scope controls', async () => {
+    renderWithProviders(<GroupRankingsPage />);
+
+    expect(await screen.findByText('HK Internet Services')).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'RRG' }));
+
+    await waitFor(() => {
+      expect(getRRGBundle).toHaveBeenCalledWith(8, 197, 'HK');
+    });
+    expect(await screen.findByText(/Relative Rotation Graph/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sectors' })).not.toBeInTheDocument();
+  });
+
+  it('hides RRG for group-ranking markets without RRG capability', async () => {
+    runtimeState.primaryMarket = 'KR';
+    runtimeState.enabledMarkets = ['KR'];
+
+    renderWithProviders(<GroupRankingsPage />);
+
+    expect(await screen.findByText('KR Internet Services')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'RRG' })).not.toBeInTheDocument();
+    expect(getRRGBundle).not.toHaveBeenCalled();
   });
 
   it('loads batch price history when the Charts tab is opened in the group modal', async () => {

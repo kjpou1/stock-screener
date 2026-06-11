@@ -38,12 +38,13 @@ import {
   getCurrentRankings,
   getRankMovers,
   getGroupDetail,
-  getRRG,
+  getRRGBundle,
   triggerCalculation,
   getCalculationStatus,
 } from '../api/groups';
 import RRGChart from '../components/Charts/RRGChart';
 import RRGViewToggle from '../components/Charts/RRGViewToggle';
+import { useRRGScopeSelection } from '../components/Charts/useRRGScopeSelection';
 import {
   LineChart,
   Line,
@@ -62,6 +63,7 @@ import {
   marketOptionsForCapability,
   normalizeMarketCode,
 } from '../utils/marketCapabilities';
+import { rrgScopesForMarket } from '../utils/rrgScopes';
 
 const MARKET_LABELS = {
   US: 'US',
@@ -598,6 +600,11 @@ function GroupRankingsPage() {
   // table-only rankings/movers fetches are skipped while it's active so a
   // rankings-endpoint failure can't block a healthy RRG view.
   const isRrgView = view === 'rrg';
+  const rrgCatalogScopes = useMemo(
+    () => rrgScopesForMarket(marketCatalog, selectedMarket),
+    [marketCatalog, selectedMarket],
+  );
+  const rrgAvailable = rrgCatalogScopes.length > 0;
 
   // Fetch current rankings
   const {
@@ -624,17 +631,27 @@ function GroupRankingsPage() {
     staleTime: 60_000,
   });
 
-  // Fetch RRG coordinates (only when the RRG view is active)
+  // Fetch RRG coordinates for all available scopes (only when the RRG view is active).
   const {
-    data: rrgData,
+    data: rrgBundle,
     isLoading: isLoadingRRG,
     error: errorRRG,
   } = useQuery({
-    queryKey: ['groupRRG', selectedMarket, rrgScope],
-    queryFn: () => getRRG(rrgScope, 8, 197, selectedMarket),
-    enabled: liveQueriesEnabled && view === 'rrg',
+    queryKey: ['groupRRGBundle', selectedMarket],
+    queryFn: () => getRRGBundle(8, 197, selectedMarket),
+    enabled: liveQueriesEnabled && isRrgView && rrgAvailable,
     staleTime: 60_000,
   });
+  const { availableScopes: availableRrgScopes } = useRRGScopeSelection({
+    view,
+    scope: rrgScope,
+    setView,
+    setScope: setRrgScope,
+    rrgAvailable,
+    availableScopes: rrgCatalogScopes,
+    bundle: rrgBundle,
+  });
+  const rrgData = rrgBundle?.payload?.[rrgScope] ?? null;
 
   // Poll calculation status while task is running
   const { data: calcStatus } = useQuery({
@@ -817,6 +834,8 @@ function GroupRankingsPage() {
         onView={setView}
         scope={rrgScope}
         onScope={setRrgScope}
+        rrgAvailable={rrgAvailable}
+        availableScopes={availableRrgScopes}
         sx={{ mb: 1.5 }}
       />
 

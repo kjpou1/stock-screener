@@ -27,7 +27,14 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
+
+from app.domain.markets.catalog import (
+    MarketCatalog,
+    RRG_SCOPE_ORDER,
+    get_market_catalog,
+)
+from app.services.rrg_history_provider import RRGHistoryProvider
 
 # ---------------------------------------------------------------------------
 # Tunable constants (module-level so they can be adjusted without touching the
@@ -53,6 +60,11 @@ DEFAULT_TAIL_WEEKS = 8
 DEFAULT_LOOKBACK_DAYS = 400  # enough daily rows to build Z_WINDOW + tail weeks
 
 
+def _unsupported_rrg_scope_message(scope: str) -> str:
+    supported = ", ".join(RRG_SCOPE_ORDER)
+    return f"Unsupported RRG scope {scope!r}. Supported: {supported}."
+
+
 @dataclass(frozen=True)
 class RRGParams:
     """Parameters controlling the RRG transform."""
@@ -61,6 +73,13 @@ class RRGParams:
     smooth_ratio_span: int = SMOOTH_RATIO_SPAN
     z_window: int = Z_WINDOW
     mom_window: int = MOM_WINDOW
+
+
+class RRGTaxonomyService(Protocol):
+    """Taxonomy dependency needed for curated non-US sector roll-ups."""
+
+    def sector_map_for_market(self, market: str) -> dict[str, str]:
+        """Return industry group -> sector mappings for one market."""
 
 
 def _week_start(d: date) -> date:
@@ -235,15 +254,34 @@ class RRGService:
     dominant GICS sector and aggregates the same series.
     """
 
-    def __init__(self, *, group_rank_service: Any) -> None:
-        self._group_rank_service = group_rank_service
+    def __init__(
+        self,
+        *,
+        history_provider: RRGHistoryProvider,
+        taxonomy_service: RRGTaxonomyService | None = None,
+        market_catalog: MarketCatalog | None = None,
+    ) -> None:
+        self._history_provider = history_provider
+        self._taxonomy_service = taxonomy_service
+        self._market_catalog = market_catalog or get_market_catalog()
+
+    def available_scopes_for_market(self, market: str | None) -> tuple[str, ...]:
+        return self._market_catalog.rrg_scopes_for_market(market or "US")
 
     def get_group_sector_map(self, db: Any, market: str = "US") -> Dict[str, str]:
-        """Map each IBD industry group -> its constituents' dominant GICS sector.
+        """Map each industry group to the canonical sector source for its market."""
+        market = (market or "US").upper()
+        if market == "US":
+            return self._stock_universe_sector_map(db, market)
+        if "sectors" not in self.available_scopes_for_market(market):
+            return {}
+        if self._taxonomy_service is None:
+            return {}
+        return self._taxonomy_service.sector_map_for_market(market)
 
-        Derived from ``StockUniverse.sector`` (fully populated) via a majority
-        vote, since the codebase has no IBD-native sector taxonomy.
-        """
+    @staticmethod
+    def _stock_universe_sector_map(db: Any, market: str) -> Dict[str, str]:
+        """Map US IBD groups to dominant GICS sectors through stock universe rows."""
         from collections import Counter, defaultdict
 
         from ..models.industry import IBDIndustryGroup
@@ -275,13 +313,14 @@ class RRGService:
         lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     ) -> Dict[str, Any]:
         """Assemble the RRG payload for one market + scope (``groups``/``sectors``)."""
+        normalized_scope = self._normalize_requested_scopes((scope,))[0]
         return self.get_rrg_scopes(
             db,
             market=market,
-            scopes=(scope,),
+            scopes=(normalized_scope,),
             tail_weeks=tail_weeks,
             lookback_days=lookback_days,
-        )[scope]
+        )[normalized_scope]
 
     def get_rrg_scopes(
         self,
@@ -299,19 +338,46 @@ class RRGService:
         sectors without re-querying. ``get_rrg`` is the single-scope shorthand.
         """
         market = (market or "US").upper()
+        requested_scopes = self._normalize_requested_scopes(scopes)
+        available_scopes = set(self.available_scopes_for_market(market))
+        if not any(scope in available_scopes for scope in requested_scopes):
+            return self._empty_scopes(market, requested_scopes)
+
         params = RRGParams(tail_weeks=tail_weeks)
         latest_date, meta, group_series = self._fetch_inputs(db, market, lookback_days)
         if latest_date is None:
-            return {
-                scope: {"date": None, "market": market, "scope": scope, "groups": []}
-                for scope in scopes
-            }
+            return self._empty_scopes(market, requested_scopes)
         return {
-            scope: self._build_scope_payload(
-                db, market, scope, latest_date, meta, group_series, params
+            scope: (
+                self._build_scope_payload(
+                    db, market, scope, latest_date, meta, group_series, params
+                )
+                if scope in available_scopes
+                else self._empty_scope(market, scope, latest_date=latest_date)
             )
+            for scope in requested_scopes
+        }
+
+    @staticmethod
+    def _empty_scopes(
+        market: str,
+        scopes: Sequence[str],
+        *,
+        latest_date: str | None = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        return {
+            scope: {"date": latest_date, "market": market, "scope": scope, "groups": []}
             for scope in scopes
         }
+
+    @staticmethod
+    def _empty_scope(
+        market: str,
+        scope: str,
+        *,
+        latest_date: str | None = None,
+    ) -> Dict[str, Any]:
+        return {"date": latest_date, "market": market, "scope": scope, "groups": []}
 
     def _fetch_inputs(
         self, db: Any, market: str, lookback_days: int
@@ -321,32 +387,11 @@ class RRGService:
         Dict[str, List[Tuple[date, float, int]]],
     ]:
         """Read the current rankings (metadata) + batched group history (one query)."""
-        from datetime import date as _date
-
-        from ..models.industry import IBDGroupRank
-
-        current = self._group_rank_service.get_current_rankings(
-            db, limit=197, market=market
+        return self._history_provider.get_all_groups_history(
+            db,
+            market=market,
+            days=lookback_days,
         )
-        if not current:
-            return None, {}, {}
-
-        latest_date = current[0]["date"]  # ISO string
-        meta = {row["industry_group"]: row for row in current}
-
-        cutoff = _date.fromisoformat(latest_date) - timedelta(days=lookback_days)
-        rows = (
-            db.query(
-                IBDGroupRank.industry_group,
-                IBDGroupRank.date,
-                IBDGroupRank.avg_rs_rating,
-                IBDGroupRank.num_stocks,
-            )
-            .filter(IBDGroupRank.market == market, IBDGroupRank.date >= cutoff)
-            .order_by(IBDGroupRank.industry_group, IBDGroupRank.date)
-            .all()
-        )
-        return latest_date, meta, self._collect_group_series(rows)
 
     def _build_scope_payload(
         self,
@@ -360,12 +405,14 @@ class RRGService:
     ) -> Dict[str, Any]:
         if scope == "sectors":
             series, scope_meta = self._aggregate_sectors(db, market, group_series)
-        else:
+        elif scope == "groups":
             series = {
                 g: [(d, rs) for (d, rs, _ns) in pts]
                 for g, pts in group_series.items()
             }
             scope_meta = meta
+        else:
+            raise ValueError(_unsupported_rrg_scope_message(scope))
 
         groups_out: List[Dict[str, Any]] = []
         for name, daily in series.items():
@@ -396,15 +443,18 @@ class RRGService:
         }
 
     @staticmethod
-    def _collect_group_series(
-        rows: Sequence[Tuple[str, date, float, Optional[int]]],
-    ) -> Dict[str, List[Tuple[date, float, int]]]:
-        from collections import defaultdict
-
-        series: dict[str, List[Tuple[date, float, int]]] = defaultdict(list)
-        for group, d, rs, ns in rows:
-            series[group].append((d, float(rs), int(ns or 0)))
-        return series
+    def _normalize_requested_scopes(scopes: Sequence[str]) -> tuple[str, ...]:
+        requested_scopes = tuple(
+            dict.fromkeys(str(scope or "").strip().lower() for scope in scopes)
+        )
+        unsupported_scopes = [
+            scope
+            for scope in requested_scopes
+            if scope not in RRG_SCOPE_ORDER
+        ]
+        if unsupported_scopes:
+            raise ValueError(_unsupported_rrg_scope_message(unsupported_scopes[0]))
+        return requested_scopes
 
     def _aggregate_sectors(
         self,
