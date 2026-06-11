@@ -28,6 +28,8 @@ class WarmupMetadataReadiness:
     count: int | None = None
     total: int | None = None
     percent: float | None = None
+    coverage_ratio: float | None = None
+    metadata_current: bool = False
 
 
 def _warmup_int(metadata: dict | None, key: str) -> int | None:
@@ -92,9 +94,12 @@ def evaluate_warmup_metadata(
     count = _warmup_int(metadata, "count")
     total = _warmup_int(metadata, "total")
     percent = _warmup_percent(count, total)
+    coverage_ratio = (
+        count / total if count is not None and total is not None and total > 0 else None
+    )
     summary = _warmup_summary(metadata, status=status, count=count, total=total)
 
-    if status != "completed":
+    if status not in {"completed", "partial"}:
         return WarmupMetadataReadiness(
             ready=False,
             reason=f"Cache warmup not complete for {context} ({summary})",
@@ -103,6 +108,7 @@ def evaluate_warmup_metadata(
             count=count,
             total=total,
             percent=percent,
+            coverage_ratio=coverage_ratio,
         )
 
     completed_at_raw = metadata.get("completed_at")
@@ -115,6 +121,7 @@ def evaluate_warmup_metadata(
             count=count,
             total=total,
             percent=percent,
+            coverage_ratio=coverage_ratio,
         )
     try:
         completed_at = datetime.fromisoformat(str(completed_at_raw))
@@ -127,6 +134,7 @@ def evaluate_warmup_metadata(
             count=count,
             total=total,
             percent=percent,
+            coverage_ratio=coverage_ratio,
         )
     if _reference_now(completed_at, now) - completed_at > max_age:
         return WarmupMetadataReadiness(
@@ -137,6 +145,20 @@ def evaluate_warmup_metadata(
             count=count,
             total=total,
             percent=percent,
+            coverage_ratio=coverage_ratio,
+        )
+
+    if status == "partial":
+        return WarmupMetadataReadiness(
+            ready=False,
+            reason=f"Cache warmup not complete for {context} ({summary})",
+            summary=summary,
+            status=status,
+            count=count,
+            total=total,
+            percent=percent,
+            coverage_ratio=coverage_ratio,
+            metadata_current=True,
         )
 
     return WarmupMetadataReadiness(
@@ -147,6 +169,8 @@ def evaluate_warmup_metadata(
         count=count,
         total=total,
         percent=percent,
+        coverage_ratio=coverage_ratio,
+        metadata_current=True,
     )
 
 
