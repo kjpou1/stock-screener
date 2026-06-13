@@ -13,9 +13,12 @@ import { useRuntime } from '../contexts/RuntimeContext';
 function MarketScanPage() {
   const { features } = useRuntime();
   const [selectedTab, setSelectedTab] = useState(0);
+  // Daily Snapshot first: it renders from one cached payload, while Key
+  // Markets mounts the TradingView widget (~180 external requests) — only
+  // pay that cost when the user opens that tab.
   const subTabs = useMemo(() => ([
-    { id: 'key_markets', label: 'Key Markets', render: () => <KeyMarketsTab /> },
     { id: 'daily_snapshot', label: 'Daily Snapshot', render: () => <DailyMarketSnapshotTab /> },
+    { id: 'key_markets', label: 'Key Markets', render: () => <KeyMarketsTab /> },
     ...(features.themes
       ? [{ id: 'themes', label: 'Themes', render: () => <ThemesTab /> }]
       : []),

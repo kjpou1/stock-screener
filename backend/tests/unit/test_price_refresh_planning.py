@@ -283,10 +283,14 @@ def test_build_market_price_refresh_plan_owns_universe_and_github_seed(universe_
     )
 
     assert sync_calls == [(universe_session, "HK", True)]
-    assert plan.all_symbols == ("0700.HK", "0005.HK")
-    assert plan.symbol_markets == {"0700.HK": "HK", "0005.HK": "HK"}
+    # Universe symbols first, then the HK key-market instruments needed by
+    # the Daily Snapshot cards (0700.HK deduplicated against the universe).
+    assert plan.all_symbols == (
+        "0700.HK", "0005.HK", "^HSI", "2800.HK", "3690.HK", "0941.HK",
+    )
+    assert plan.symbol_markets == {symbol: "HK" for symbol in plan.all_symbols}
     assert plan.source is PriceRefreshSource.GITHUB_AND_LIVE
-    assert plan.symbols == ("0005.HK",)
+    assert plan.symbols == ("0005.HK", "^HSI", "2800.HK", "3690.HK", "0941.HK")
 
 
 def test_split_supported_price_symbols_reuses_provider_no_data_policy():

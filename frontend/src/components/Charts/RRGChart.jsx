@@ -9,15 +9,17 @@
  *     Lagging   (x<100,  y<100)   red
  *     Improving (x<100,  y>=100)  blue
  *
- * Each tail vertex is a hoverable dot (date + weeks-ago), the trace is graduated
- * oldest->newest, and direction arrows point the way each series is travelling.
- * A filter narrows the plot to the groups/sectors of interest.
+ * Each tail vertex is a hoverable dot (date + weeks-ago), the trace is a
+ * Catmull-Rom spline graduated oldest->newest, and direction arrows point the
+ * way each series is travelling. A filter narrows the plot to the groups/
+ * sectors of interest, and dragging a rectangle zooms into it (Reset zoom to
+ * restore the full view).
  *
  * Coordinates are pre-computed server-side (see backend rrg_service.py), so this
  * component is purely presentational. It is shared by the live Group Rankings
  * page and the static-site Groups page — both pass the same `{ groups: [...] }`.
  */
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import {
   ScatterChart,
   Scatter,
@@ -34,6 +36,7 @@ import {
 } from 'recharts';
 import {
   Box,
+  Button,
   Card,
   CardContent,
   Typography,
@@ -42,8 +45,9 @@ import {
   FormControlLabel,
   Switch,
 } from '@mui/material';
-import { QUADRANT_COLORS, QUADRANT_FILLS, quadrantColor } from './rrgColors';
-import { buildTailPoints } from './rrgTrace';
+import { QUADRANT_COLORS, QUADRANT_FILLS, QUADRANT_LAYOUT, quadrantColor } from './rrgColors';
+import { buildTailPoints, catmullRomPath, splineSegmentMidpoint, layoutLabels } from './rrgTrace';
+import { useDragZoom } from './useDragZoom';
 import { useRRGFilters } from './useRRGFilters';
 import RRGFilters from './RRGFilters';
 
@@ -93,74 +97,101 @@ const ArrowHead = ({ x, y, angle, color }) => {
   );
 };
 
-/** Recharts <Customized> child: draws direction arrows in pixel space using the
- *  axis scales. Degrades to nothing if scales aren't ready (e.g. SSR/jsdom). */
-const TailArrows = ({ shown, perSegment, xAxisMap, yAxisMap }) => {
+/** Recharts <Customized> child: draws everything that lives in pixel space —
+ *  the smoothed Catmull-Rom trail per series, direction arrows riding the
+ *  curve, and (when toggled) collision-avoiding head labels. All of it is
+ *  clipped to the plot area so nothing spills over the axes when zoomed.
+ *  Degrades to nothing if scales aren't ready (e.g. SSR/jsdom). */
+const RRGOverlay = ({ shown, perSegment, showLabels, xAxisMap, yAxisMap }) => {
+  const clipId = useId();
   const xAxis = xAxisMap && xAxisMap[Object.keys(xAxisMap)[0]];
   const yAxis = yAxisMap && yAxisMap[Object.keys(yAxisMap)[0]];
   const xScale = xAxis?.scale;
   const yScale = yAxis?.scale;
   if (typeof xScale !== 'function' || typeof yScale !== 'function') return null;
 
+  const [rx0, rx1] = xScale.range();
+  const [ry0, ry1] = yScale.range();
+  const clip = {
+    x: Math.min(rx0, rx1),
+    y: Math.min(ry0, ry1),
+    width: Math.abs(rx1 - rx0),
+    height: Math.abs(ry1 - ry0),
+  };
+
+  const splines = [];
   const arrows = [];
   shown.forEach((g) => {
     const tail = g.tail || [];
     if (tail.length < 2) return;
-    const from = perSegment ? 1 : tail.length - 1;
-    for (let i = from; i < tail.length; i += 1) {
-      const a = tail[i - 1];
-      const b = tail[i];
-      const x1 = xScale(a.x);
-      const y1 = yScale(a.y);
-      const x2 = xScale(b.x);
-      const y2 = yScale(b.y);
-      if ([x1, y1, x2, y2].some((v) => v == null || Number.isNaN(v))) continue;
+    const pts = tail.map((p) => ({ x: xScale(p.x), y: yScale(p.y) }));
+    if (pts.some((p) => p.x == null || p.y == null || Number.isNaN(p.x) || Number.isNaN(p.y))) return;
+    const color = quadrantColor(g.quadrant);
+    splines.push(
+      <path
+        key={`spline-${g.industry_group}`}
+        d={catmullRomPath(pts)}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        strokeOpacity={0.5}
+      />,
+    );
+    const from = perSegment ? 1 : pts.length - 1;
+    for (let i = from; i < pts.length; i += 1) {
+      const mid = splineSegmentMidpoint(pts[i - 2], pts[i - 1], pts[i], pts[i + 1]);
       arrows.push(
         <ArrowHead
           key={`${g.industry_group}-${i}`}
-          x={(x1 + x2) / 2}
-          y={(y1 + y2) / 2}
-          angle={Math.atan2(y2 - y1, x2 - x1)}
-          color={quadrantColor(g.quadrant)}
+          x={mid.x}
+          y={mid.y}
+          angle={mid.angle}
+          color={color}
         />,
       );
     }
   });
-  return <g>{arrows}</g>;
-};
 
-/** Recharts <Customized> child: draws the group/sector name next to each current
- *  head dot, tinted by quadrant. Uses the axis scales like TailArrows, and
- *  degrades to nothing if scales aren't ready (e.g. SSR/jsdom). */
-const GroupLabels = ({ shown, xAxisMap, yAxisMap }) => {
-  const xAxis = xAxisMap && xAxisMap[Object.keys(xAxisMap)[0]];
-  const yAxis = yAxisMap && yAxisMap[Object.keys(yAxisMap)[0]];
-  const xScale = xAxis?.scale;
-  const yScale = yAxis?.scale;
-  if (typeof xScale !== 'function' || typeof yScale !== 'function') return null;
+  let labels = null;
+  if (showLabels) {
+    const anchors = [];
+    shown.forEach((g) => {
+      const cur = g.current;
+      if (!cur) return;
+      const cx = xScale(cur.x);
+      const cy = yScale(cur.y);
+      if ([cx, cy].some((v) => v == null || Number.isNaN(v))) return;
+      // Heads zoomed out of view get no label (it would be clipped anyway).
+      if (cx < clip.x || cx > clip.x + clip.width || cy < clip.y || cy > clip.y + clip.height) return;
+      anchors.push({ cx, cy, text: g.industry_group, color: quadrantColor(g.quadrant) });
+    });
+    labels = layoutLabels(anchors).map((l) => (
+      <text
+        key={`label-${l.text}`}
+        x={l.x}
+        y={l.y}
+        fontSize={10}
+        fontWeight={600}
+        fill={l.color}
+        pointerEvents="none"
+      >
+        {l.text}
+      </text>
+    ));
+  }
 
   return (
     <g>
-      {shown.map((g) => {
-        const cur = g.current;
-        if (!cur) return null;
-        const cx = xScale(cur.x);
-        const cy = yScale(cur.y);
-        if ([cx, cy].some((v) => v == null || Number.isNaN(v))) return null;
-        return (
-          <text
-            key={`label-${g.industry_group}`}
-            x={cx + 7}
-            y={cy - 7}
-            fontSize={10}
-            fontWeight={600}
-            fill={quadrantColor(g.quadrant)}
-            pointerEvents="none"
-          >
-            {g.industry_group}
-          </text>
-        );
-      })}
+      <defs>
+        <clipPath id={clipId}>
+          <rect {...clip} />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#${clipId})`}>
+        {splines}
+        {arrows}
+        {labels}
+      </g>
     </g>
   );
 };
@@ -208,7 +239,7 @@ const RRGTooltip = ({ active, payload }) => {
 /**
  * @param {Object[]} props.data.groups - RRGGroupResponse[] from the API
  */
-export default function RRGChart({ data, isLoading, error, onSelectGroup, height = 560 }) {
+export default function RRGChart({ data, isLoading, error, onSelectGroup, height = 720 }) {
   const groups = useMemo(() => (data?.groups ?? []), [data]);
   const asOf = data?.date ?? null;
   const scopeLabel = data?.scope === 'sectors' ? 'Sectors' : 'Groups';
@@ -223,6 +254,20 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
   const lo = 100 - bound;
   const hi = 100 + bound;
 
+  const zoom = useDragZoom({ x: [lo, hi], y: [lo, hi] }, `${data?.scope}|${data?.market}`);
+  const [xLo, xHi] = zoom.xDomain;
+  const [yLo, yHi] = zoom.yDomain;
+  // The 100/100 cross, clamped into the visible window so the quadrant
+  // backdrops always tile exactly the visible plot area when zoomed.
+  const xMid = Math.min(Math.max(100, xLo), xHi);
+  const yMid = Math.min(Math.max(100, yLo), yHi);
+
+  // Zoomed domains land on arbitrary floats, so ticks need explicit rounding —
+  // with decimals adapted to the window size so narrow zooms stay distinct.
+  const span = Math.max(xHi - xLo, yHi - yLo);
+  const tickDecimals = span > 8 ? 0 : span > 2 ? 1 : 2;
+  const formatTick = (v) => v.toFixed(tickDecimals);
+
   // Single "detail level" driving both tail-dot richness and arrow density, so
   // the default (all-series) view stays light and the filtered view gets the
   // full per-week detail.
@@ -232,9 +277,12 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
     () => shown.map((g) => ({ ...g, ...g.current, isCurrent: true })),
     [shown],
   );
+  // Hoverable per-week tail dots exist only in the detailed view (the trail
+  // itself is RRGOverlay's spline), so the point enrichment is skipped — and
+  // no tail Scatters are mounted — when many series are shown.
   const tails = useMemo(
-    () => shown.map((g) => ({ name: g.industry_group, color: quadrantColor(g.quadrant), points: buildTailPoints(g, asOf) })),
-    [shown, asOf],
+    () => (detailed ? shown.map((g) => ({ name: g.industry_group, points: buildTailPoints(g, asOf) })) : []),
+    [detailed, shown, asOf],
   );
 
   if (isLoading) {
@@ -279,7 +327,15 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
             Relative Rotation Graph — {scopeLabel}
             {asOf ? ` · ${asOf}` : ''}
           </Typography>
+          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+            drag to zoom
+          </Typography>
           <Box sx={{ flexGrow: 1 }} />
+          {zoom.isZoomed && (
+            <Button size="small" variant="outlined" onClick={zoom.reset}>
+              Reset zoom
+            </Button>
+          )}
           <FormControlLabel
             control={
               <Switch
@@ -308,66 +364,90 @@ export default function RRGChart({ data, isLoading, error, onSelectGroup, height
           <Alert severity="info">No {scopeLabel.toLowerCase()} match the current filter.</Alert>
         ) : (
           <ResponsiveContainer width="100%" height={height}>
-            <ScatterChart margin={{ top: 20, right: 30, bottom: 20, left: 10 }}>
+            <ScatterChart
+              margin={{ top: 20, right: 30, bottom: 20, left: 10 }}
+              {...zoom.mouseHandlers}
+              style={{ cursor: 'crosshair', userSelect: 'none' }}
+            >
               <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
 
-              {/* Quadrant backdrops */}
-              <ReferenceArea x1={100} x2={hi} y1={100} y2={hi} fill={QUADRANT_FILLS.Leading} fillOpacity={1}
-                label={{ value: 'Leading', position: 'insideTopRight', fill: QUADRANT_COLORS.Leading, fontSize: 12 }} />
-              <ReferenceArea x1={100} x2={hi} y1={lo} y2={100} fill={QUADRANT_FILLS.Weakening} fillOpacity={1}
-                label={{ value: 'Weakening', position: 'insideBottomRight', fill: QUADRANT_COLORS.Weakening, fontSize: 12 }} />
-              <ReferenceArea x1={lo} x2={100} y1={lo} y2={100} fill={QUADRANT_FILLS.Lagging} fillOpacity={1}
-                label={{ value: 'Lagging', position: 'insideBottomLeft', fill: QUADRANT_COLORS.Lagging, fontSize: 12 }} />
-              <ReferenceArea x1={lo} x2={100} y1={100} y2={hi} fill={QUADRANT_FILLS.Improving} fillOpacity={1}
-                label={{ value: 'Improving', position: 'insideTopLeft', fill: QUADRANT_COLORS.Improving, fontSize: 12 }} />
+              {/* Quadrant backdrops, clamped to the (possibly zoomed) window.
+                  A quadrant fully outside the window collapses and is skipped. */}
+              {QUADRANT_LAYOUT.map(({ name, x, y, labelPosition }) => {
+                const [x1, x2] = x === 'hi' ? [xMid, xHi] : [xLo, xMid];
+                const [y1, y2] = y === 'hi' ? [yMid, yHi] : [yLo, yMid];
+                if (!(x1 < x2 && y1 < y2)) return null;
+                return (
+                  <ReferenceArea
+                    key={name}
+                    x1={x1}
+                    x2={x2}
+                    y1={y1}
+                    y2={y2}
+                    fill={QUADRANT_FILLS[name]}
+                    fillOpacity={1}
+                    label={{ value: name, position: labelPosition, fill: QUADRANT_COLORS[name], fontSize: 12 }}
+                  />
+                );
+              })}
 
-              <ReferenceLine x={100} stroke="#9e9e9e" strokeDasharray="4 4" />
-              <ReferenceLine y={100} stroke="#9e9e9e" strokeDasharray="4 4" />
+              {xLo < 100 && 100 < xHi && <ReferenceLine x={100} stroke="#9e9e9e" strokeDasharray="4 4" />}
+              {yLo < 100 && 100 < yHi && <ReferenceLine y={100} stroke="#9e9e9e" strokeDasharray="4 4" />}
 
               <XAxis
                 type="number"
                 dataKey="x"
                 name="RS-Ratio"
-                domain={[lo, hi]}
+                domain={[xLo, xHi]}
+                allowDataOverflow
                 tickCount={5}
+                tickFormatter={formatTick}
                 label={{ value: 'RS-Ratio', position: 'insideBottom', offset: -10, fontSize: 12 }}
               />
               <YAxis
                 type="number"
                 dataKey="y"
                 name="RS-Momentum"
-                domain={[lo, hi]}
+                domain={[yLo, yHi]}
+                allowDataOverflow
                 tickCount={5}
+                tickFormatter={formatTick}
                 label={{ value: 'RS-Momentum', angle: -90, position: 'insideLeft', fontSize: 12 }}
               />
               <ZAxis type="number" dataKey="num_stocks" range={[60, 500]} name="Constituents" />
               <Tooltip content={<RRGTooltip />} cursor={{ strokeDasharray: '3 3' }} />
 
-              {/* Tails: connecting line, plus graduated hoverable per-week dots
-                  in the detailed (filtered) view; line-only when many series. */}
+              {/* Graduated hoverable per-week tail dots (empty unless detailed).
+                  The connecting trail itself is RRGOverlay's spline below. */}
               {tails.map((t) => (
                 <Scatter
                   key={`tail-${t.name}`}
                   data={t.points}
-                  line={{ stroke: t.color, strokeWidth: 1.25, strokeOpacity: 0.45 }}
-                  lineType="joint"
-                  shape={detailed ? <TailDot /> : () => null}
+                  shape={<TailDot />}
                   isAnimationActive={false}
                   legendType="none"
                 />
               ))}
 
-              {/* Direction arrows along each trace (per-segment when detailed). */}
+              {/* Spline trails, direction arrows (per-segment when detailed),
+                  and collision-avoiding head labels (toggle). */}
               <Customized
                 component={(props) => (
-                  <TailArrows shown={shown} perSegment={detailed} {...props} />
+                  <RRGOverlay shown={shown} perSegment={detailed} showLabels={showLabels} {...props} />
                 )}
               />
 
-              {/* Group/sector name labels next to each head dot (toggle). */}
-              {showLabels && (
-                <Customized
-                  component={(props) => <GroupLabels shown={shown} {...props} />}
+              {/* In-progress drag-to-zoom selection rectangle. */}
+              {zoom.drag && (
+                <ReferenceArea
+                  x1={zoom.drag.x1}
+                  x2={zoom.drag.x2}
+                  y1={zoom.drag.y1}
+                  y2={zoom.drag.y2}
+                  fill="#90caf9"
+                  fillOpacity={0.2}
+                  stroke="#90caf9"
+                  strokeOpacity={0.7}
                 />
               )}
 

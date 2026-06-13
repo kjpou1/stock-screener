@@ -49,8 +49,11 @@ class ScanRepository(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def list_recent(self, limit: int = 20) -> list[object]:
-        """Return the most recent scans, ordered by started_at descending."""
+    def list_recent(self, limit: int = 20, market: str | None = None) -> list[object]:
+        """Return the most recent scans, ordered by started_at descending.
+
+        ``market`` restricts results to scans of one universe market.
+        """
         ...
 
     @abc.abstractmethod

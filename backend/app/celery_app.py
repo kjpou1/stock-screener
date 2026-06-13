@@ -49,6 +49,7 @@ celery_app = Celery(
         'app.tasks.daily_market_pipeline_tasks',  # Per-market daily refresh + scan pipeline
         'app.tasks.telemetry_tasks',  # Weekly telemetry governance audit (asia.10.4)
         'app.tasks.runtime_bootstrap_tasks',  # Local-default first-run bootstrap orchestration
+        'app.tasks.static_export_tasks',  # Scheduled static-data bundle export
         'app.interfaces.tasks.feature_store_tasks',  # Daily feature snapshot
     ]
 )
@@ -397,6 +398,19 @@ if settings.cache_warmup_enabled:
     # already do a full refresh that supersedes the stale-intraday refresh.
     # The task function remains available for manual invocation via the API.
     _shared_entries = {
+        # Static-data bundle export for nginx /static-data/ (opt-in).
+        # Runs after the Asia-close and US-close daily pipelines so each
+        # rebuild picks up the freshest published runs.
+        **({
+            'static-site-data-export': {
+                'task': 'app.tasks.static_export_tasks.export_static_site_data',
+                'schedule': crontab(
+                    hour=settings.static_export_hours,
+                    minute=settings.static_export_minute,
+                ),
+            },
+        } if settings.static_export_enabled else {}),
+
         # Weekly cleanup of orphaned scans (cancelled, stale running/queued).
         # Runs Sunday at 1:45 AM ET, before weekly-full-refresh at 2:00 AM.
         'weekly-orphaned-scan-cleanup': {

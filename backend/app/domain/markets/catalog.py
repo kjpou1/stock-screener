@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from typing import Iterable
 
 from .mic import MicFacts
 
 CATALOG_VERSION = "2026-05-17.v1"
+RRG_SCOPE_ORDER: tuple[str, ...] = ("groups", "sectors")
 
 
 class MarketCatalogError(ValueError):
@@ -20,9 +21,22 @@ class MarketCapabilities:
     breadth: bool
     fundamentals: bool
     group_rankings: bool
+    rrg_scopes: tuple[str, ...]
     feature_snapshot: bool
     official_universe: bool
     finviz_screening: bool
+
+    def __post_init__(self) -> None:
+        requested = tuple(str(scope).strip().lower() for scope in self.rrg_scopes)
+        unsupported = sorted(set(requested) - set(RRG_SCOPE_ORDER))
+        if unsupported:
+            raise ValueError(f"Unsupported RRG scopes: {', '.join(unsupported)}")
+        if len(set(requested)) != len(requested):
+            raise ValueError("Duplicate RRG scopes are not allowed")
+        if "sectors" in requested and "groups" not in requested:
+            raise ValueError("RRG sectors scope requires groups scope")
+        normalized = tuple(scope for scope in RRG_SCOPE_ORDER if scope in requested)
+        object.__setattr__(self, "rrg_scopes", normalized)
 
 
 @dataclass(frozen=True)
@@ -115,6 +129,8 @@ class MarketCatalogEntry:
         )
 
     def as_runtime_payload(self) -> dict[str, object]:
+        capabilities = asdict(self.capabilities)
+        capabilities["rrg_scopes"] = list(self.capabilities.rrg_scopes)
         return {
             "code": self.code,
             "label": self.label,
@@ -130,7 +146,7 @@ class MarketCatalogEntry:
             "provider_calendar_id": self.provider_calendar_id,
             "exchanges": list(self.exchanges),
             "indexes": list(self.indexes),
-            "capabilities": asdict(self.capabilities),
+            "capabilities": capabilities,
         }
 
 
@@ -145,7 +161,10 @@ class MarketCatalog:
         return [entry.code for entry in self._entries]
 
     def market_codes_with_capability(self, capability: str) -> tuple[str, ...]:
-        supported_capabilities = {field.name for field in fields(MarketCapabilities)}
+        supported_capabilities = {
+            field.name for field in fields(MarketCapabilities)
+            if field.name != "rrg_scopes"
+        }
         if capability not in supported_capabilities:
             supported = ", ".join(sorted(supported_capabilities))
             raise MarketCatalogError(
@@ -155,6 +174,22 @@ class MarketCatalog:
             entry.code
             for entry in self._entries
             if getattr(entry.capabilities, capability)
+        )
+
+    def rrg_scopes_for_market(self, market: str | None) -> tuple[str, ...]:
+        return self.get(market).capabilities.rrg_scopes
+
+    def market_codes_with_rrg_scope(self, scope: str) -> tuple[str, ...]:
+        normalized = str(scope or "").strip().lower()
+        if normalized not in RRG_SCOPE_ORDER:
+            supported = ", ".join(RRG_SCOPE_ORDER)
+            raise MarketCatalogError(
+                f"Unsupported RRG scope {scope!r}. Supported: {supported}"
+            )
+        return tuple(
+            entry.code
+            for entry in self._entries
+            if normalized in entry.capabilities.rrg_scopes
         )
 
     def get(self, market: str | None) -> MarketCatalogEntry:
@@ -174,14 +209,25 @@ class MarketCatalog:
         }
 
 
-FULL_CAPABILITIES = MarketCapabilities(
+GROUP_RANKING_CAPABILITIES = MarketCapabilities(
     benchmark=True,
     breadth=True,
     fundamentals=True,
     group_rankings=True,
+    rrg_scopes=(),
     feature_snapshot=True,
     official_universe=True,
     finviz_screening=False,
+)
+
+RRG_GROUP_AND_SECTOR_CAPABILITIES = replace(
+    GROUP_RANKING_CAPABILITIES,
+    rrg_scopes=RRG_SCOPE_ORDER,
+)
+
+RRG_GROUP_ONLY_CAPABILITIES = replace(
+    GROUP_RANKING_CAPABILITIES,
+    rrg_scopes=("groups",),
 )
 
 
@@ -265,6 +311,7 @@ MARKET_CATALOG = MarketCatalog(
                 breadth=True,
                 fundamentals=True,
                 group_rankings=True,
+                rrg_scopes=RRG_SCOPE_ORDER,
                 feature_snapshot=True,
                 official_universe=False,
                 finviz_screening=True,
@@ -282,7 +329,7 @@ MARKET_CATALOG = MarketCatalog(
                 ),
             ),
             exchanges=("HKEX", "SEHK", "XHKG"),
-            capabilities=FULL_CAPABILITIES,
+            capabilities=RRG_GROUP_AND_SECTOR_CAPABILITIES,
         ),
         _market_entry(
             code="IN",
@@ -302,7 +349,7 @@ MARKET_CATALOG = MarketCatalog(
                 ),
             ),
             exchanges=("NSE", "XNSE", "BSE", "XBOM"),
-            capabilities=FULL_CAPABILITIES,
+            capabilities=RRG_GROUP_AND_SECTOR_CAPABILITIES,
         ),
         _market_entry(
             code="JP",
@@ -316,7 +363,7 @@ MARKET_CATALOG = MarketCatalog(
                 ),
             ),
             exchanges=("TSE", "JPX", "XTKS"),
-            capabilities=FULL_CAPABILITIES,
+            capabilities=RRG_GROUP_AND_SECTOR_CAPABILITIES,
         ),
         _market_entry(
             code="KR",
@@ -330,7 +377,7 @@ MARKET_CATALOG = MarketCatalog(
                 ),
             ),
             exchanges=("KOSPI", "KOSDAQ", "KRX", "XKRX"),
-            capabilities=FULL_CAPABILITIES,
+            capabilities=GROUP_RANKING_CAPABILITIES,
         ),
         _market_entry(
             code="TW",
@@ -344,7 +391,7 @@ MARKET_CATALOG = MarketCatalog(
                 ),
             ),
             exchanges=("TWSE", "TPEX", "XTAI"),
-            capabilities=FULL_CAPABILITIES,
+            capabilities=RRG_GROUP_ONLY_CAPABILITIES,
         ),
         _market_entry(
             code="CN",
@@ -368,7 +415,7 @@ MARKET_CATALOG = MarketCatalog(
                 ),
             ),
             exchanges=("SSE", "SZSE", "BJSE", "XSHG", "XSHE", "XBSE"),
-            capabilities=FULL_CAPABILITIES,
+            capabilities=GROUP_RANKING_CAPABILITIES,
         ),
         _market_entry(
             code="CA",
@@ -387,7 +434,7 @@ MARKET_CATALOG = MarketCatalog(
                 ),
             ),
             exchanges=("TSX", "TSXV", "XTSE", "XTNX"),
-            capabilities=FULL_CAPABILITIES,
+            capabilities=GROUP_RANKING_CAPABILITIES,
         ),
         _market_entry(
             code="DE",
@@ -411,6 +458,7 @@ MARKET_CATALOG = MarketCatalog(
                 breadth=True,
                 fundamentals=True,
                 group_rankings=False,
+                rrg_scopes=(),
                 feature_snapshot=True,
                 official_universe=True,
                 finviz_screening=False,
@@ -433,6 +481,7 @@ MARKET_CATALOG = MarketCatalog(
                 breadth=False,
                 fundamentals=True,
                 group_rankings=False,
+                rrg_scopes=(),
                 feature_snapshot=True,
                 official_universe=True,
                 finviz_screening=False,
@@ -455,6 +504,7 @@ MARKET_CATALOG = MarketCatalog(
                 breadth=False,
                 fundamentals=True,
                 group_rankings=False,
+                rrg_scopes=(),
                 feature_snapshot=True,
                 official_universe=True,
                 finviz_screening=False,
@@ -477,6 +527,7 @@ MARKET_CATALOG = MarketCatalog(
                 breadth=False,
                 fundamentals=True,
                 group_rankings=False,
+                rrg_scopes=(),
                 feature_snapshot=True,
                 official_universe=True,
                 finviz_screening=False,

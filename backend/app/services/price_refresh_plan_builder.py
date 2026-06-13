@@ -29,6 +29,38 @@ def _normalize_symbols(symbols: Sequence[str]) -> tuple[str, ...]:
     return tuple(str(symbol).upper() for symbol in symbols)
 
 
+def _key_market_refresh_symbols(
+    market: str | None,
+    normalize_market: Callable[[str], str],
+) -> dict[str, str]:
+    """Provider-supported key-market data symbols keyed to their market.
+
+    Daily Snapshot cards (e.g. BTC-USD, ^VIX, DX-Y.NYB) are not part of the
+    stock universe, so without this the server deployment never fetches them
+    — the static-site pipeline fetches them explicitly and stays correct.
+    """
+    from ..domain.markets.key_markets import (
+        KEY_MARKET_INSTRUMENTS_BY_MARKET,
+        key_market_instruments,
+    )
+    from ..domain.providers.price_symbol_support import split_supported_price_symbols
+
+    if market is not None:
+        instruments = key_market_instruments(market)
+    else:
+        instruments = tuple(
+            instrument
+            for group in KEY_MARKET_INSTRUMENTS_BY_MARKET.values()
+            for instrument in group
+        )
+    by_symbol = {
+        instrument.data_symbol.upper(): normalize_market(instrument.market)
+        for instrument in instruments
+    }
+    supported, _skipped = split_supported_price_symbols(list(by_symbol))
+    return {symbol: by_symbol[symbol] for symbol in supported}
+
+
 def load_active_price_refresh_universe(
     db: Session,
     *,
@@ -55,6 +87,31 @@ def load_active_price_refresh_universe(
     return PriceRefreshUniverse(symbols=all_symbols, symbol_markets=symbol_markets)
 
 
+def extend_universe_with_key_market_symbols(
+    universe: PriceRefreshUniverse,
+    market: str | None,
+    normalize_market: Callable[[str], str],
+) -> PriceRefreshUniverse:
+    """Append Daily Snapshot key-market symbols to a refresh universe.
+
+    Composed into refresh planning only — readiness gating loads the plain
+    universe and must not count instruments outside it.
+    """
+    key_market_symbols = _key_market_refresh_symbols(market, normalize_market)
+    extra_symbols = tuple(
+        symbol for symbol in key_market_symbols if symbol not in universe.symbol_markets
+    )
+    if not extra_symbols:
+        return universe
+    return PriceRefreshUniverse(
+        symbols=universe.symbols + extra_symbols,
+        symbol_markets={
+            **universe.symbol_markets,
+            **{symbol: key_market_symbols[symbol] for symbol in extra_symbols},
+        },
+    )
+
+
 def build_price_refresh_planning_input(
     db: Session,
     *,
@@ -67,11 +124,15 @@ def build_price_refresh_planning_input(
     recently_refreshed_filter: Callable[[Sequence[str]], Sequence[str]] | None = None,
 ) -> PriceRefreshPlanningInput:
     parsed_mode = PriceRefreshMode.parse(mode)
-    universe = load_active_price_refresh_universe(
-        db,
-        market=market,
-        effective_market=effective_market,
-        normalize_market=normalize_market,
+    universe = extend_universe_with_key_market_symbols(
+        load_active_price_refresh_universe(
+            db,
+            market=market,
+            effective_market=effective_market,
+            normalize_market=normalize_market,
+        ),
+        market,
+        normalize_market,
     )
     all_symbols = _normalize_symbols(universe.symbols)
     github_seed = None

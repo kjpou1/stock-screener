@@ -20,7 +20,7 @@ import Brightness7Icon from '@mui/icons-material/Brightness7';
 import { ColorModeContext } from '../contexts/ColorModeContext';
 import { useStaticMarket } from './StaticMarketContext';
 import { getStaticSupportedMarkets, resolveStaticMarketEntry, useStaticManifest } from './dataClient';
-import { marketFlag } from './marketFlags';
+import { marketFlag } from '../utils/marketFlags';
 
 const NAV_ITEMS = [
   { path: '/', label: 'Daily' },

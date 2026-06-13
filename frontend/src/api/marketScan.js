@@ -17,6 +17,19 @@ export const getWatchlist = async (listName) => {
 };
 
 /**
+ * Get the aggregated Daily Snapshot payload for a market in one request
+ * (key markets, top candidates, leaders, top groups, freshness dates).
+ * @param {string} market - Market code (e.g. 'US', 'HK')
+ * @returns {Promise<Object>} Daily snapshot payload
+ */
+export const getDailySnapshot = async (market) => {
+  const response = await apiClient.get(`${BASE_PATH}/daily-snapshot`, {
+    params: { market },
+  });
+  return response.data;
+};
+
+/**
  * Add a symbol to a watchlist.
  * @param {string} listName - The watchlist identifier
  * @param {Object} symbolData - Symbol data { symbol, display_name?, notes? }

@@ -77,9 +77,12 @@ class SqlScanRepository(ScanRepository):
 
         self._session.flush()
 
-    def list_recent(self, limit: int = 20) -> list[Scan]:
+    def list_recent(self, limit: int = 20, market: str | None = None) -> list[Scan]:
+        query = self._session.query(Scan)
+        if market:
+            query = query.filter(Scan.universe_market == market.upper())
         return (
-            self._session.query(Scan)
+            query
             .order_by(Scan.started_at.desc())
             .limit(limit)
             .all()

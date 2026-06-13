@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Container,
@@ -9,12 +9,8 @@ import {
   Paper,
   Grid,
   Chip,
-  FormControl,
   Tab,
   Tabs,
-  InputLabel,
-  MenuItem,
-  Select,
   Table,
   TableBody,
   TableCell,
@@ -34,10 +30,7 @@ import { getPriceHistory } from '../api/stocks';
 import BreadthChart from '../components/Charts/BreadthChart';
 import { format } from 'date-fns';
 import { useRuntime } from '../contexts/RuntimeContext';
-import {
-  marketOptionsForCapability,
-  normalizeMarketCode,
-} from '../utils/marketCapabilities';
+import { useMarketForCapability } from '../contexts/MarketContext';
 
 // Helper function to calculate date range based on time selection
 const getDateRange = (range) => {
@@ -88,21 +81,6 @@ const sentimentBg = {
   neutral: { row: 'transparent', cell: 'transparent' },
 };
 
-const MARKET_LABELS = {
-  US: 'United States',
-  HK: 'Hong Kong',
-  IN: 'India',
-  JP: 'Japan',
-  KR: 'South Korea',
-  TW: 'Taiwan',
-  CN: 'China A-shares',
-  CA: 'Canada',
-  DE: 'Germany',
-  SG: 'Singapore',
-  AU: 'Australia',
-  MY: 'Malaysia',
-};
-
 const MARKET_LIVE_BENCHMARK_SYMBOLS = {
   US: 'SPY',
   HK: '2800.HK',
@@ -120,77 +98,16 @@ const MARKET_LIVE_BENCHMARK_SYMBOLS = {
 
 const BREADTH_MARKET_FALLBACKS = ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA', 'DE'];
 
-function normalizeMarket(market) {
-  const normalized = normalizeMarketCode(market || 'US');
-  return MARKET_LABELS[normalized] ? normalized : 'US';
-}
-
 function BreadthPage() {
-  const {
-    runtimeReady,
-    uiSnapshots,
-    primaryMarket = 'US',
-    enabledMarkets = ['US'],
-    supportedMarkets = ['US', 'HK', 'IN', 'JP', 'KR', 'TW', 'CN', 'CA', 'DE', 'SG', 'AU', 'MY'],
-    marketCatalog,
-  } = useRuntime();
+  const { runtimeReady, uiSnapshots } = useRuntime();
   const queryClient = useQueryClient();
-  const marketOptions = useMemo(() => marketOptionsForCapability({
-    marketCatalog,
-    capability: 'breadth',
-    fallbackCodes: BREADTH_MARKET_FALLBACKS,
-    enabledMarkets,
-    supportedMarkets,
-  }), [enabledMarkets, marketCatalog, supportedMarkets]);
+  const { market: selectedMarket } = useMarketForCapability(
+    'breadth',
+    BREADTH_MARKET_FALLBACKS,
+  );
   const [selectedTab, setSelectedTab] = useState(0);
   const [chartTimeRange, setChartTimeRange] = useState('1M');
-  const [bootstrapSettled, setBootstrapSettled] = useState(false);
-  const [selectedMarket, setSelectedMarket] = useState(() => {
-    const normalizedPrimary = normalizeMarket(primaryMarket);
-    return marketOptions.includes(normalizedPrimary)
-      ? normalizedPrimary
-      : (marketOptions[0] || 'US');
-  });
-  const userSelectedMarketRef = useRef(false);
-  const previousPrimaryMarketRef = useRef(normalizeMarket(primaryMarket));
-  useEffect(() => {
-    if (marketOptions.length === 0) {
-      return;
-    }
-    const normalizedPrimary = normalizeMarket(primaryMarket);
-    const fallbackMarket = marketOptions.includes(normalizedPrimary)
-      ? normalizedPrimary
-      : marketOptions[0];
-    const primaryChanged = previousPrimaryMarketRef.current !== normalizedPrimary;
-
-    setSelectedMarket((currentMarket) => {
-      if (!marketOptions.includes(currentMarket)) {
-        userSelectedMarketRef.current = false;
-        return fallbackMarket;
-      }
-      if (
-        !userSelectedMarketRef.current
-        && marketOptions.includes(normalizedPrimary)
-        && currentMarket !== normalizedPrimary
-      ) {
-        return normalizedPrimary;
-      }
-      if (
-        primaryChanged
-        && !userSelectedMarketRef.current
-        && currentMarket !== fallbackMarket
-      ) {
-        return fallbackMarket;
-      }
-      return currentMarket;
-    });
-    previousPrimaryMarketRef.current = normalizedPrimary;
-  }, [marketOptions, primaryMarket]);
-  useEffect(() => {
-    setBootstrapSettled(false);
-  }, [selectedMarket]);
   const snapshotEnabled = runtimeReady && Boolean(uiSnapshots?.breadth);
-  const liveQueriesEnabled = runtimeReady && (!snapshotEnabled || bootstrapSettled);
 
   // Calculate date range for chart based on selected time range
   const chartDateRange = getDateRange(chartTimeRange);
@@ -201,60 +118,44 @@ function BreadthPage() {
   const spyPeriod = spyPeriodMap[chartTimeRange] || '1y';
   const benchmarkSymbol = MARKET_LIVE_BENCHMARK_SYMBOLS[selectedMarket] || null;
 
+  // The snapshot fast-path: the bootstrap queryFn seeds the live query
+  // caches synchronously for this exact market — key and payload come from
+  // the same fetch closure, so cross-market mixups are structurally
+  // impossible (no seeding effect, no settled flag).
   const breadthBootstrapQuery = useQuery({
     queryKey: ['breadthBootstrap', selectedMarket],
-    queryFn: () => getBreadthBootstrap(selectedMarket),
-    enabled: snapshotEnabled && !bootstrapSettled,
+    queryFn: async () => {
+      const snapshot = await getBreadthBootstrap(selectedMarket);
+      if (snapshot && !snapshot.is_stale) {
+        const payload = snapshot.payload ?? {};
+        queryClient.setQueryData(['breadth', 'current', selectedMarket], payload.current ?? null);
+        queryClient.setQueryData(['breadth', 'historical', selectedMarket, startDate, endDate], payload.history_90d ?? []);
+        queryClient.setQueryData(['breadth', 'summary', selectedMarket], payload.summary ?? {});
+        if (payload.chart_range === '1M') {
+          queryClient.setQueryData(
+            ['breadth', 'chart', selectedMarket, defaultChartDateRange.startDate, defaultChartDateRange.endDate],
+            payload.chart_data ?? []
+          );
+          if (benchmarkSymbol) {
+            queryClient.setQueryData(
+              ['benchmark', 'history', selectedMarket, benchmarkSymbol, '1mo'],
+              payload.benchmark_overlay ?? payload.spy_overlay ?? []
+            );
+          }
+        }
+      }
+      return snapshot;
+    },
+    enabled: snapshotEnabled,
     retry: false,
     staleTime: 60_000,
   });
-
-  useEffect(() => {
-    if (!snapshotEnabled) {
-      return;
-    }
-    if (breadthBootstrapQuery.isError) {
-      setBootstrapSettled(true);
-      return;
-    }
-    if (!breadthBootstrapQuery.isSuccess) {
-      return;
-    }
-    if (breadthBootstrapQuery.data?.is_stale) {
-      setBootstrapSettled(true);
-      return;
-    }
-
-    const payload = breadthBootstrapQuery.data?.payload ?? {};
-    queryClient.setQueryData(['breadth', 'current', selectedMarket], payload.current ?? null);
-    queryClient.setQueryData(['breadth', 'historical', selectedMarket, startDate, endDate], payload.history_90d ?? []);
-    queryClient.setQueryData(['breadth', 'summary', selectedMarket], payload.summary ?? {});
-    if (payload.chart_range === '1M') {
-      queryClient.setQueryData(
-        ['breadth', 'chart', selectedMarket, defaultChartDateRange.startDate, defaultChartDateRange.endDate],
-        payload.chart_data ?? []
-      );
-      if (benchmarkSymbol) {
-        queryClient.setQueryData(
-          ['benchmark', 'history', selectedMarket, benchmarkSymbol, '1mo'],
-          payload.benchmark_overlay ?? payload.spy_overlay ?? []
-        );
-      }
-    }
-    setBootstrapSettled(true);
-  }, [
-    benchmarkSymbol,
-    breadthBootstrapQuery.data,
-    breadthBootstrapQuery.isError,
-    breadthBootstrapQuery.isSuccess,
-    defaultChartDateRange.endDate,
-    defaultChartDateRange.startDate,
-    endDate,
-    queryClient,
-    selectedMarket,
-    snapshotEnabled,
-    startDate,
-  ]);
+  // Live queries wait for the bootstrap to resolve either way: on success
+  // their caches are freshly seeded (no fetch); on error or a stale
+  // snapshot they fetch live data.
+  const liveQueriesEnabled = runtimeReady && (
+    !snapshotEnabled || breadthBootstrapQuery.isSuccess || breadthBootstrapQuery.isError
+  );
 
   // Fetch current breadth data
   const {
@@ -313,29 +214,6 @@ function BreadthPage() {
     setSelectedTab(newValue);
   };
 
-  const marketSelector = (
-    <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
-      <FormControl size="small" sx={{ minWidth: 180 }}>
-        <InputLabel id="breadth-market-label">Market</InputLabel>
-        <Select
-          labelId="breadth-market-label"
-          value={selectedMarket}
-          label="Market"
-          onChange={(event) => {
-            userSelectedMarketRef.current = true;
-            setSelectedMarket(event.target.value);
-          }}
-        >
-          {marketOptions.map((market) => (
-            <MenuItem key={market} value={market}>
-              {MARKET_LABELS[market] || market}
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
-    </Box>
-  );
-
   if (!runtimeReady) {
     return (
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
@@ -349,7 +227,6 @@ function BreadthPage() {
   if (errorCurrent) {
     return (
       <Container maxWidth="xl" sx={{ mt: 2, mb: 2 }}>
-        {marketSelector}
         <Alert severity="error">
           Error loading {selectedMarket} breadth data: {errorCurrent.message}
         </Alert>
@@ -365,8 +242,6 @@ function BreadthPage() {
         </Box>
       ) : (
         <>
-          {marketSelector}
-
           {/* Top Section - Side by Side Layout */}
           <Grid container spacing={2} sx={{ mb: 2 }}>
             {/* Left: Chart (60%) */}

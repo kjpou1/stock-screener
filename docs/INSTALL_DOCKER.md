@@ -57,7 +57,7 @@ cp .env.docker.example .env.docker
 # Edit .env.docker:
 #   BACKEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-backend
 #   FRONTEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-frontend
-#   APP_IMAGE_TAG=v1.2.0
+#   APP_IMAGE_TAG=v1.3.0
 #   SERVER_AUTH_PASSWORD=choose-a-long-random-password
 #   CORS_ORIGINS=https://stocks.yourdomain.com
 

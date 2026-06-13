@@ -1,27 +1,129 @@
 """
 API endpoints for Market Scan feature.
-Handles CRUD operations for market scan watchlists.
+Handles CRUD operations for market scan watchlists and the aggregated
+Daily Snapshot payload.
 """
-from fastapi import APIRouter, Depends, HTTPException
+import json
+import logging
+from typing import Any, List
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List
 
 from ...database import get_db
+from ...domain.markets.catalog import get_market_catalog
 from ...domain.markets.key_markets import key_market_watchlist_defaults
 from ...models.market_scan import ScanWatchlist
 from ...schemas.market_scan import (
+    DailySnapshotResponse,
     WatchlistSymbolCreate,
     WatchlistSymbolUpdate,
     WatchlistSymbolResponse,
     WatchlistResponse,
     ReorderRequest,
 )
+from ...services.daily_snapshot_service import (
+    DAILY_SNAPSHOT_CACHE_TTL_SECONDS,
+    build_daily_snapshot_payload,
+    daily_snapshot_cache_key,
+    daily_snapshot_etag,
+    latest_completed_scan,
+)
+from ...services.redis_pool import get_redis_client
+from ...wiring.bootstrap import get_get_scan_results_use_case, get_uow
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_market_catalog = get_market_catalog()
+
 # Default symbols for the US Key Markets watchlist.
 DEFAULT_KEY_MARKETS = key_market_watchlist_defaults("US")
+
+
+def _if_none_match_matches(header_value: str | None, etag: str) -> bool:
+    """RFC 7232 weak comparison against a (possibly comma-separated) If-None-Match."""
+    if not header_value:
+        return False
+
+    def opaque(tag: str) -> str:
+        return tag[2:] if tag.startswith("W/") else tag
+
+    target = opaque(etag)
+    for token in header_value.split(","):
+        token = token.strip()
+        if token and (token == "*" or opaque(token) == target):
+            return True
+    return False
+
+
+# The handler returns a raw Response so the cached JSON string is served
+# byte-for-byte (the ETag hashes those exact bytes); response_model documents
+# the contract in OpenAPI, and the payload is validated against it on the
+# cache-miss path below.
+@router.get("/daily-snapshot", response_model=DailySnapshotResponse)
+async def get_daily_snapshot(
+    request: Request,
+    market: str = Query("US", description="Market code (e.g. US, HK, JP, TW)"),
+    db: Session = Depends(get_db),
+    uow: Any = Depends(get_uow),
+    use_case: Any = Depends(get_get_scan_results_use_case),
+):
+    """Aggregated Daily Snapshot payload for one market in a single request.
+
+    Replaces the per-section fan-out (watchlist + per-symbol history + scan
+    bootstrap + scan results + group rankings) with one cached payload.
+    Served with an ETag; clients sending ``If-None-Match`` get a 304.
+    """
+    code = str(market or "US").strip().upper()
+    if code not in _market_catalog.supported_market_codes():
+        supported = ", ".join(_market_catalog.supported_market_codes())
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported market '{market}'. Expected one of: {supported}.",
+        )
+
+    # Keyed on the latest scan run: publishing a new run switches the key,
+    # so cached snapshots invalidate immediately (TTL is just a backstop).
+    scan = latest_completed_scan(db, code)
+    cache_key = daily_snapshot_cache_key(code, scan.scan_id if scan else None)
+    payload_json: str | None = None
+    redis = get_redis_client()
+    if redis is not None:
+        try:
+            cached = redis.get(cache_key)
+            if cached:
+                payload_json = cached.decode("utf-8") if isinstance(cached, bytes) else cached
+        except Exception as exc:
+            logger.warning("Daily snapshot cache read failed: %s", exc)
+
+    if payload_json is None:
+        payload = build_daily_snapshot_payload(
+            db,
+            market=code,
+            market_display_name=_market_catalog.get(code).label,
+            scan=scan,
+            uow=uow,
+            scan_results_use_case=use_case,
+        )
+        DailySnapshotResponse.model_validate(payload)
+        payload_json = json.dumps(payload, separators=(",", ":"))
+        if redis is not None:
+            try:
+                redis.setex(cache_key, DAILY_SNAPSHOT_CACHE_TTL_SECONDS, payload_json)
+            except Exception as exc:
+                logger.warning("Daily snapshot cache write failed: %s", exc)
+
+    etag = daily_snapshot_etag(payload_json)
+    if _if_none_match_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers={"ETag": etag})
+    return Response(
+        content=payload_json,
+        media_type="application/json",
+        headers={"ETag": etag, "Cache-Control": "private, max-age=60"},
+    )
 
 
 @router.get("/watchlist/{list_name}", response_model=WatchlistResponse)

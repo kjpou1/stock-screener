@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
   Box,
@@ -19,21 +19,19 @@ import {
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 
-import { getWatchlist } from '../../api/marketScan';
-import { getScanBootstrap, getScanResults } from '../../api/scans';
-import { getCurrentRankings } from '../../api/groups';
-import { fetchPriceHistory, priceHistoryKeys, PRICE_HISTORY_STALE_TIME } from '../../api/priceHistory';
+import { getDailySnapshot } from '../../api/marketScan';
+import { getScanResults } from '../../api/scans';
 import PriceSparkline from '../Scan/PriceSparkline';
-import RSSparkline from '../Scan/RSSparkline';
-import ChartViewerModal from '../Scan/ChartViewerModal';
+import ChartViewerModal from '../Scan/ChartViewerModalLazy';
+import DailyScanRowsTable from '../shared/DailyScanRowsTable';
 import RankChangeCell from '../shared/RankChangeCell';
+import TickerCell from '../common/TickerCell';
 import { MARKET_CAP_OPTIONS } from '../../features/scan/components/filterPanel/constants';
-import { getGroupRankColor } from '../../utils/colorUtils';
+import { useMarket } from '../../contexts/MarketContext';
+import { marketFlag } from '../../utils/marketFlags';
 import { formatLocalCurrency } from '../../utils/formatUtils';
-import { resolveMarketCapDisplay } from '../../utils/marketCapUtils';
 
 const EMPTY_ROWS = [];
-const DEFAULT_MIN_VOLUME = 100_000_000;
 const DEFAULT_TOP_RESULTS = 20;
 
 function formatNumber(value, digits = 0) {
@@ -45,80 +43,55 @@ function formatNumber(value, digits = 0) {
 }
 
 function DailyMarketSnapshotTab() {
-  const watchlistQuery = useQuery({
-    queryKey: ['marketScan', 'key_markets'],
-    queryFn: () => getWatchlist('key_markets'),
-  });
-
-  const scanBootstrapQuery = useQuery({
-    queryKey: ['scanBootstrap', 'latest'],
-    queryFn: () => getScanBootstrap(),
-    retry: false,
+  const { selectedMarket } = useMarket();
+  const snapshotQuery = useQuery({
+    queryKey: ['dailySnapshot', selectedMarket],
+    queryFn: () => getDailySnapshot(selectedMarket),
     staleTime: 60_000,
   });
+  const snapshot = snapshotQuery.data;
+  const scanId = snapshot?.scan_id ?? null;
+  const freshness = snapshot?.freshness ?? {};
+  const minDollarVolume = snapshot?.top_candidates?.min_dollar_volume ?? null;
 
-  const groupsQuery = useQuery({
-    queryKey: ['groupRankings', 'dailySnapshot', 10],
-    queryFn: () => getCurrentRankings(10),
+  const [marketCapMin, setMarketCapMin] = useState('');
+  // The default view comes entirely from the aggregated snapshot payload;
+  // a market-cap override re-queries the scan results for this scan only.
+  const filteredResultsQuery = useQuery({
+    queryKey: ['dailySnapshot', 'mcapFilter', scanId, marketCapMin, minDollarVolume],
+    queryFn: () => getScanResults(scanId, {
+      page: 1,
+      per_page: DEFAULT_TOP_RESULTS,
+      sort_by: 'composite_score',
+      sort_order: 'desc',
+      ...(minDollarVolume != null ? { min_volume: minDollarVolume } : {}),
+      min_market_cap_usd: Number(marketCapMin),
+    }),
+    enabled: Boolean(scanId) && marketCapMin !== '',
     staleTime: 60_000,
+    // Keep rows visible across market-cap bucket changes, but only within
+    // the same scan — a market switch swaps the scan and must not show the
+    // previous market's rows while loading.
+    placeholderData: (previous, previousQuery) => (
+      previousQuery?.queryKey?.[2] === scanId ? previous : undefined
+    ),
   });
 
-  const watchlistSymbols = useMemo(
-    () => watchlistQuery.data?.symbols ?? EMPTY_ROWS,
-    [watchlistQuery.data],
-  );
-  const keyMarketHistories = useQueries({
-    queries: watchlistSymbols.map((entry) => ({
-      queryKey: priceHistoryKeys.symbol(entry.symbol, '3mo'),
-      queryFn: () => fetchPriceHistory(entry.symbol, '3mo'),
-      staleTime: PRICE_HISTORY_STALE_TIME,
-      enabled: Boolean(entry.symbol),
-    })),
-  });
+  const topResults = marketCapMin === ''
+    ? (snapshot?.top_candidates?.rows ?? EMPTY_ROWS)
+    : (filteredResultsQuery.data?.results ?? EMPTY_ROWS);
+  const leaders = snapshot?.leaders?.rows ?? EMPTY_ROWS;
+  const topGroups = (snapshot?.top_groups ?? EMPTY_ROWS).slice(0, 10);
 
   const keyMarkets = useMemo(() => (
-    watchlistSymbols.map((entry, idx) => {
-      const history = keyMarketHistories[idx]?.data ?? [];
-      const closes = history.map((h) => h.close).filter((c) => c != null);
-      const latestClose = closes.length ? closes[closes.length - 1] : null;
-      const priorClose = closes.length >= 2 ? closes[closes.length - 2] : null;
-      const change1d = latestClose != null && priorClose
-        ? ((latestClose - priorClose) / priorClose) * 100
-        : null;
-      return {
-        symbol: entry.symbol,
-        display_name: entry.display_name || entry.symbol,
-        closes,
-        latestClose,
-        change1d,
-      };
-    })
-  ), [watchlistSymbols, keyMarketHistories]);
+    (snapshot?.key_markets ?? EMPTY_ROWS)
+      .map((item) => ({
+        ...item,
+        closes: (item.history || []).map((h) => h.close).filter((c) => c != null),
+      }))
+      .filter((item) => item.latest_close != null && item.closes.length > 1)
+  ), [snapshot]);
 
-  const scanPayload = scanBootstrapQuery.data?.payload;
-  const scanId = scanPayload?.selected_scan?.scan_id
-    ?? scanPayload?.results_page?.scan_id
-    ?? null;
-  const scanAsOfDate = scanPayload?.selected_scan?.as_of_date
-    ?? scanPayload?.results_page?.as_of_date
-    ?? null;
-  const [marketCapMin, setMarketCapMin] = useState('');
-  const topResultsParams = useMemo(() => ({
-    page: 1,
-    per_page: DEFAULT_TOP_RESULTS,
-    sort_by: 'composite_score',
-    sort_order: 'desc',
-    min_volume: DEFAULT_MIN_VOLUME,
-    ...(marketCapMin !== '' ? { min_market_cap_usd: Number(marketCapMin) } : {}),
-  }), [marketCapMin]);
-  const topResultsQuery = useQuery({
-    queryKey: ['marketScan', 'dailySnapshot', scanId, topResultsParams],
-    queryFn: () => getScanResults(scanId, topResultsParams),
-    enabled: Boolean(scanId),
-    staleTime: 60_000,
-    placeholderData: (previous) => previous,
-  });
-  const topResults = topResultsQuery.data?.results ?? EMPTY_ROWS;
   const topResultSymbols = useMemo(() => {
     const seen = new Set();
     return topResults
@@ -126,16 +99,10 @@ function DailyMarketSnapshotTab() {
       .filter((symbol) => symbol && !seen.has(symbol) && seen.add(symbol));
   }, [topResults]);
 
-  const topGroups = (groupsQuery.data?.rankings ?? EMPTY_ROWS).slice(0, 10);
-  const groupsDate = groupsQuery.data?.date ?? null;
-
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedSymbol, setSelectedSymbol] = useState(null);
 
-  const isInitialLoading =
-    watchlistQuery.isLoading || scanBootstrapQuery.isLoading || groupsQuery.isLoading;
-
-  if (isInitialLoading) {
+  if (snapshotQuery.isLoading) {
     return (
       <Box display="flex" justifyContent="center" py={8}>
         <CircularProgress />
@@ -143,7 +110,7 @@ function DailyMarketSnapshotTab() {
     );
   }
 
-  if (scanBootstrapQuery.isError && groupsQuery.isError) {
+  if (snapshotQuery.isError) {
     return <Alert severity="error">Failed to load the daily snapshot.</Alert>;
   }
 
@@ -152,6 +119,9 @@ function DailyMarketSnapshotTab() {
     setSelectedSymbol(symbol);
     setChartModalOpen(true);
   };
+
+  const flag = marketFlag(snapshot?.market);
+  const marketDisplay = snapshot?.market_display_name || snapshot?.market || '';
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto', pr: 1 }}>
@@ -167,23 +137,22 @@ function DailyMarketSnapshotTab() {
         }}
       >
         <Typography variant="h5" sx={{ fontWeight: 700, letterSpacing: '-0.5px' }}>
-          Daily Snapshot
+          {flag ? `${flag}  ` : ''}{marketDisplay} Snapshot
         </Typography>
         <Typography
           variant="caption"
           color="text.secondary"
           sx={{ fontFamily: 'monospace', fontSize: '11px' }}
         >
-          {`Scan ${scanAsOfDate || '-'} · Groups ${groupsDate || '-'}`}
+          {`Snapshot ${freshness.scan_as_of_date || '-'} · Breadth ${freshness.breadth_latest_date || '-'} · Groups ${freshness.groups_latest_date || '-'}`}
         </Typography>
       </Box>
 
       <Grid container spacing={1.5} sx={{ mb: 2 }}>
         {keyMarkets.map((item) => {
-          const trend = item.closes.length >= 2
-            ? (item.closes[item.closes.length - 1] > item.closes[0] ? 1
-              : item.closes[item.closes.length - 1] < item.closes[0] ? -1 : 0)
-            : 0;
+          const trend = item.closes[item.closes.length - 1] > item.closes[0]
+            ? 1
+            : item.closes[item.closes.length - 1] < item.closes[0] ? -1 : 0;
           return (
             <Grid item xs={6} sm={4} md={2.4} key={item.symbol}>
               <Paper elevation={0} sx={{ p: 1.5, height: '100%', border: '1px solid', borderColor: 'divider' }}>
@@ -194,62 +163,56 @@ function DailyMarketSnapshotTab() {
                   {item.display_name}
                 </Typography>
                 <Typography variant="body1" sx={{ mt: 0.5, fontFamily: 'monospace', fontWeight: 600 }}>
-                  {formatLocalCurrency(item.latestClose, 'USD')}
+                  {formatLocalCurrency(item.latest_close, item.currency || 'USD')}
                 </Typography>
                 <Box display="flex" alignItems="center" sx={{ mt: 0.5 }}>
-                  {item.change1d > 0 && <TrendingUpIcon sx={{ fontSize: 14, mr: 0.25, color: 'success.main' }} />}
-                  {item.change1d < 0 && <TrendingDownIcon sx={{ fontSize: 14, mr: 0.25, color: 'error.main' }} />}
+                  {item.change_1d > 0 && <TrendingUpIcon sx={{ fontSize: 14, mr: 0.25, color: 'success.main' }} />}
+                  {item.change_1d < 0 && <TrendingDownIcon sx={{ fontSize: 14, mr: 0.25, color: 'error.main' }} />}
                   <Typography
                     variant="body2"
                     sx={{
-                      color: item.change1d > 0 ? 'success.main' : item.change1d < 0 ? 'error.main' : 'text.secondary',
+                      color: item.change_1d > 0 ? 'success.main' : item.change_1d < 0 ? 'error.main' : 'text.secondary',
                       fontFamily: 'monospace',
                       fontWeight: 600,
                       fontSize: '12px',
                     }}
                   >
-                    {item.change1d != null
-                      ? `${item.change1d > 0 ? '+' : ''}${formatNumber(item.change1d, 2)}%`
+                    {item.change_1d != null
+                      ? `${item.change_1d > 0 ? '+' : ''}${formatNumber(item.change_1d, 2)}%`
                       : '-'}
                   </Typography>
                 </Box>
-                {item.closes.length > 1 ? (
-                  <Box sx={{ mt: 0.75 }}>
-                    <PriceSparkline
-                      data={item.closes}
-                      trend={trend}
-                      change1d={null}
-                      width="100%"
-                      height={36}
-                      showChange={false}
-                    />
-                  </Box>
-                ) : null}
+                <Box sx={{ mt: 0.75 }}>
+                  <PriceSparkline
+                    data={item.closes}
+                    trend={trend}
+                    change1d={null}
+                    width="100%"
+                    height={36}
+                    showChange={false}
+                  />
+                </Box>
               </Paper>
             </Grid>
           );
         })}
       </Grid>
 
-      <Paper elevation={0} sx={{ p: 1.5, mb: 2, border: '1px solid', borderColor: 'divider' }}>
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'space-between',
-            gap: 1,
-            flexWrap: 'wrap',
-            mb: 1,
-          }}
-        >
-          <Box>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', mb: 0.5 }}>
-              Top Scan Candidates
-            </Typography>
-            <Typography variant="caption" color="text.disabled" sx={{ display: 'block', fontSize: '10px' }}>
-              Dollar volume &gt; $100M. Click a row for chart details.
-            </Typography>
-          </Box>
+      <DailyScanRowsTable
+        title="Top Scan Candidates"
+        subtitle={
+          minDollarVolume == null
+            ? 'No default liquidity floor. Click a row for chart details.'
+            : `Dollar volume >= ${formatNumber(minDollarVolume)}. Click a row for chart details.`
+        }
+        rows={topResults}
+        isLoading={marketCapMin !== '' && filteredResultsQuery.isLoading}
+        isError={marketCapMin !== '' && filteredResultsQuery.isError}
+        errorMessage="Failed to load scan candidates."
+        emptyMessage="No scan candidates match the current filters."
+        showRating
+        onOpenChart={scanId ? handleRowClick : null}
+        action={(
           <TextField
             select
             size="small"
@@ -268,110 +231,17 @@ function DailyMarketSnapshotTab() {
               </MenuItem>
             ))}
           </TextField>
-        </Box>
-        <TableContainer>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell align="center">Symbol</TableCell>
-                <TableCell align="center">Score</TableCell>
-                <TableCell align="center">Price</TableCell>
-                <TableCell align="center">MCap</TableCell>
-                <TableCell align="center">Rating</TableCell>
-                <TableCell align="center">Price Trend</TableCell>
-                <TableCell align="center">RS Trend</TableCell>
-                <TableCell align="center">IBD Group</TableCell>
-                <TableCell align="center">Grp Rank</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {topResultsQuery.isLoading && topResults.length === 0 ? (
-                <TableRow>
-                  <TableCell align="center" colSpan={9}>
-                    <CircularProgress size={18} />
-                  </TableCell>
-                </TableRow>
-              ) : null}
-              {topResultsQuery.isError && topResults.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={9} align="center" sx={{ color: 'error.main', py: 2 }}>
-                    Failed to load scan candidates.
-                  </TableCell>
-                </TableRow>
-              ) : null}
-              {topResults.map((row) => (
-                <TableRow
-                  key={row.symbol}
-                  hover
-                  tabIndex={0}
-                  onClick={() => handleRowClick(row.symbol)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      handleRowClick(row.symbol);
-                    }
-                  }}
-                  sx={{ cursor: scanId ? 'pointer' : 'default' }}
-                >
-                  <TableCell align="center" sx={{ fontWeight: 600 }}>{row.symbol}</TableCell>
-                  <TableCell align="center">{formatNumber(row.composite_score, 1)}</TableCell>
-                  <TableCell align="center">{formatLocalCurrency(row.current_price, row.currency)}</TableCell>
-                  <TableCell align="center">
-                    {resolveMarketCapDisplay(row, null, { preferUsd: true }).formattedValue}
-                  </TableCell>
-                  <TableCell align="center">{row.rating}</TableCell>
-                  <TableCell align="center">
-                    {row.price_sparkline_data ? (
-                      <Box display="flex" justifyContent="center">
-                        <PriceSparkline
-                          data={row.price_sparkline_data}
-                          trend={row.price_trend}
-                          change1d={row.price_change_1d}
-                          industry={row.ibd_industry_group}
-                          width={130}
-                          height={28}
-                        />
-                      </Box>
-                    ) : '-'}
-                  </TableCell>
-                  <TableCell align="center">
-                    {row.rs_sparkline_data ? (
-                      <Box display="flex" justifyContent="center">
-                        <RSSparkline
-                          data={row.rs_sparkline_data}
-                          trend={row.rs_trend}
-                          width={78}
-                          height={20}
-                        />
-                      </Box>
-                    ) : '-'}
-                  </TableCell>
-                  <TableCell align="center" sx={{
-                    color: 'text.secondary', fontSize: '12px',
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140,
-                  }}>
-                    {row.ibd_industry_group || '-'}
-                  </TableCell>
-                  <TableCell align="center" sx={{
-                    fontFamily: 'monospace',
-                    fontWeight: row.ibd_group_rank && row.ibd_group_rank <= 20 ? 600 : 400,
-                    color: getGroupRankColor(row.ibd_group_rank),
-                  }}>
-                    {row.ibd_group_rank ?? '-'}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {!topResultsQuery.isLoading && !topResultsQuery.isError && topResults.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={9} align="center" sx={{ color: 'text.disabled', py: 2 }}>
-                    No scan candidates match the current filters.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Paper>
+        )}
+      />
+
+      <DailyScanRowsTable
+        title="Leaders in Leading Groups"
+        subtitle={`Top 20 by report card: group rank <= ${snapshot?.leaders?.criteria?.max_group_rank ?? 40}, RS >= ${snapshot?.leaders?.criteria?.min_rs_rating ?? 80}${minDollarVolume != null ? `, dollar volume >= ${formatNumber(minDollarVolume)}` : ''}.`}
+        rows={leaders}
+        emptyMessage="No leaders in leading groups match the current snapshot."
+        showRs
+        onOpenChart={scanId ? handleRowClick : null}
+      />
 
       <Paper elevation={0} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider' }}>
         <Typography variant="subtitle1" sx={{ fontWeight: 600, fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px', mb: 0.5 }}>
@@ -384,6 +254,7 @@ function DailyMarketSnapshotTab() {
                 <TableCell align="center">Rank</TableCell>
                 <TableCell>Group</TableCell>
                 <TableCell align="right">1W</TableCell>
+                <TableCell align="right">1M</TableCell>
                 <TableCell>Top Stock</TableCell>
               </TableRow>
             </TableHead>
@@ -393,14 +264,15 @@ function DailyMarketSnapshotTab() {
                   <TableCell align="center" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{group.rank}</TableCell>
                   <TableCell>{group.industry_group}</TableCell>
                   <TableCell align="right"><RankChangeCell value={group.rank_change_1w} /></TableCell>
-                  <TableCell sx={{ fontWeight: 500, fontFamily: 'monospace', fontSize: '11px' }}>
-                    {group.top_symbol || '-'}
+                  <TableCell align="right"><RankChangeCell value={group.rank_change_1m} /></TableCell>
+                  <TableCell>
+                    <TickerCell symbol={group.top_symbol} companyName={group.top_symbol_name} />
                   </TableCell>
                 </TableRow>
               ))}
               {topGroups.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4} align="center" sx={{ color: 'text.disabled', py: 2 }}>
+                  <TableCell colSpan={5} align="center" sx={{ color: 'text.disabled', py: 2 }}>
                     No group rankings available.
                   </TableCell>
                 </TableRow>

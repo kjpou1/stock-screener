@@ -39,8 +39,11 @@ export default defineConfig(({ mode }) => {
             'react-vendor': ['react', 'react-dom', 'react-router-dom'],
             // MUI components (large library)
             'mui-vendor': ['@mui/material', '@mui/icons-material'],
-            // Data visualization
-            'charts-vendor': ['recharts', 'lightweight-charts'],
+            // Data visualization: recharts powers the always-visible
+            // sparklines; lightweight-charts only loads with the (lazy)
+            // candlestick chart modals.
+            'charts-vendor': ['recharts'],
+            'price-charts-vendor': ['lightweight-charts'],
             // React Query for data fetching
             'query-vendor': ['@tanstack/react-query', '@tanstack/react-virtual'],
           },

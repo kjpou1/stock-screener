@@ -39,7 +39,9 @@ export function useRuntimeActivity({ enabled = true } = {}) {
         if (isBootstrapRunning || activeCount > 0 || hasWarning) {
           return 5_000;
         }
-        return 30_000;
+        // Idle: nothing changes server-side without a job running, so a
+        // slow heartbeat is enough (background refetch is disabled globally).
+        return 60_000;
       }
       : false,
   });

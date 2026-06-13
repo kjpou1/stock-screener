@@ -1,5 +1,6 @@
 import {
   Box,
+  CircularProgress,
   Paper,
   Table,
   TableBody,
@@ -10,9 +11,9 @@ import {
   Typography,
 } from '@mui/material';
 
-import PriceSparkline from '../../components/Scan/PriceSparkline';
-import RSSparkline from '../../components/Scan/RSSparkline';
-import TickerCell from '../../components/common/TickerCell';
+import PriceSparkline from '../Scan/PriceSparkline';
+import RSSparkline from '../Scan/RSSparkline';
+import TickerCell from '../common/TickerCell';
 import { getGroupRankColor } from '../../utils/colorUtils';
 import { formatLocalCurrency } from '../../utils/formatUtils';
 import { resolveMarketCapDisplay } from '../../utils/marketCapUtils';
@@ -29,18 +30,25 @@ function DailyScanRowsTable({
   title,
   subtitle,
   rows,
-  chartEnabledSymbols,
-  navigationSymbols,
-  onOpenChart,
+  // null means every row opens a chart (server mode); the static site passes
+  // the set of symbols that have an exported chart bundle.
+  chartEnabledSymbols = null,
+  navigationSymbols = [],
+  onOpenChart = null,
   emptyMessage,
   action = null,
   showRs = false,
   showRating = false,
+  isLoading = false,
+  isError = false,
+  errorMessage = 'Failed to load rows.',
   priceSparklineWidth = 137,
   priceSparklineInnerWidth = 86,
   testId,
 }) {
-  const isChartEnabled = (symbol) => chartEnabledSymbols.has(symbol);
+  const isChartEnabled = (symbol) => (
+    Boolean(onOpenChart) && (chartEnabledSymbols == null || chartEnabledSymbols.has(symbol))
+  );
   const handleRowOpen = (symbol) => {
     if (isChartEnabled(symbol)) {
       onOpenChart(symbol, navigationSymbols);
@@ -91,6 +99,20 @@ function DailyScanRowsTable({
             </TableRow>
           </TableHead>
           <TableBody>
+            {isLoading && rows.length === 0 ? (
+              <TableRow>
+                <TableCell align="center" colSpan={colSpan}>
+                  <CircularProgress size={18} />
+                </TableCell>
+              </TableRow>
+            ) : null}
+            {isError && rows.length === 0 ? (
+              <TableRow>
+                <TableCell align="center" colSpan={colSpan} sx={{ color: 'error.main', py: 2 }}>
+                  {errorMessage}
+                </TableCell>
+              </TableRow>
+            ) : null}
             {rows.map((row) => {
               const rowChartEnabled = isChartEnabled(row.symbol);
               return (
@@ -160,7 +182,7 @@ function DailyScanRowsTable({
                 </TableRow>
               );
             })}
-            {rows.length === 0 ? (
+            {!isLoading && !isError && rows.length === 0 ? (
               <TableRow>
                 <TableCell align="center" colSpan={colSpan}>
                   {emptyMessage}

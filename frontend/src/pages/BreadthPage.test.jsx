@@ -1,11 +1,31 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 
 import BreadthPage from './BreadthPage';
+import MarketSelector from '../components/Layout/MarketSelector';
+import { MarketProvider } from '../contexts/MarketContext';
 import * as breadthApi from '../api/breadth';
 import * as stocksApi from '../api/stocks';
 import { renderWithProviders } from '../test/renderWithProviders';
+
+// Render the page alongside the global header market selector, mirroring the
+// app layout (per-page market selectors were replaced by MarketSelector).
+function renderBreadthPage() {
+  // Fresh elements per render: reusing one element object would let React
+  // bail out of re-rendering the subtree on rerender.
+  const buildUi = () => (
+    <MemoryRouter>
+      <MarketProvider>
+        <MarketSelector />
+        <BreadthPage />
+      </MarketProvider>
+    </MemoryRouter>
+  );
+  const view = renderWithProviders(buildUi());
+  return { ...view, rerenderPage: () => view.rerender(buildUi()) };
+}
 
 const runtimeState = {
   runtimeReady: true,
@@ -77,6 +97,7 @@ function breadthRow(market = 'HK') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.clear();
   runtimeState.runtimeReady = true;
   runtimeState.uiSnapshots = { breadth: false };
   runtimeState.primaryMarket = 'HK';
@@ -100,7 +121,7 @@ beforeEach(() => {
 
 describe('BreadthPage', () => {
   it('defaults breadth requests to the runtime primary market', async () => {
-    renderWithProviders(<BreadthPage />);
+    renderBreadthPage();
 
     expect(await screen.findByText('Latest Breadth Data')).toBeInTheDocument();
 
@@ -115,7 +136,7 @@ describe('BreadthPage', () => {
     runtimeState.primaryMarket = 'KR';
     runtimeState.enabledMarkets = ['KR', 'US'];
 
-    renderWithProviders(<BreadthPage />);
+    renderBreadthPage();
 
     expect(await screen.findByText('Latest Breadth Data')).toBeInTheDocument();
 
@@ -124,14 +145,14 @@ describe('BreadthPage', () => {
       expect(breadthApi.getBreadthSummary).toHaveBeenCalledWith('KR');
       expect(stocksApi.getPriceHistory).toHaveBeenCalledWith('069500.KS', '1mo');
     });
-    expect(screen.getByRole('combobox', { name: /market/i })).toHaveTextContent('South Korea');
+    expect(screen.getByRole('combobox', { name: /market/i })).toHaveTextContent('KR');
   });
 
   it('does not request unsupported Australia breadth when AU is enabled', async () => {
     runtimeState.primaryMarket = 'AU';
     runtimeState.enabledMarkets = ['AU', 'US'];
 
-    renderWithProviders(<BreadthPage />);
+    renderBreadthPage();
 
     expect(await screen.findByText('Latest Breadth Data')).toBeInTheDocument();
 
@@ -141,14 +162,16 @@ describe('BreadthPage', () => {
       expect(stocksApi.getPriceHistory).toHaveBeenCalledWith('SPY', '1mo');
     });
     expect(breadthApi.getCurrentBreadth).not.toHaveBeenCalledWith('AU');
-    expect(screen.getByRole('combobox', { name: /market/i })).toHaveTextContent('United States');
+    // Header selector shows the global selection (AU); the page falls back
+    // to a breadth-capable market for its data requests.
+    expect(screen.getByRole('combobox', { name: /market/i })).toHaveTextContent('AU');
   });
 
   it('resyncs the default market when runtime primary market data loads late', async () => {
     runtimeState.primaryMarket = 'US';
     runtimeState.enabledMarkets = ['US'];
 
-    const { rerender } = renderWithProviders(<BreadthPage />);
+    const { rerenderPage } = renderBreadthPage();
 
     expect(await screen.findByText('Latest Breadth Data')).toBeInTheDocument();
     await waitFor(() => {
@@ -157,7 +180,7 @@ describe('BreadthPage', () => {
 
     runtimeState.primaryMarket = 'HK';
     runtimeState.enabledMarkets = ['US', 'HK'];
-    rerender(<BreadthPage />);
+    rerenderPage();
 
     await waitFor(() => {
       expect(breadthApi.getCurrentBreadth).toHaveBeenCalledWith('HK');
@@ -169,7 +192,7 @@ describe('BreadthPage', () => {
     runtimeState.primaryMarket = 'HK';
     runtimeState.enabledMarkets = ['US'];
 
-    const { rerender } = renderWithProviders(<BreadthPage />);
+    const { rerenderPage } = renderBreadthPage();
 
     expect(await screen.findByText('Latest Breadth Data')).toBeInTheDocument();
     await waitFor(() => {
@@ -177,7 +200,7 @@ describe('BreadthPage', () => {
     });
 
     runtimeState.enabledMarkets = ['US', 'HK'];
-    rerender(<BreadthPage />);
+    rerenderPage();
 
     await waitFor(() => {
       expect(breadthApi.getCurrentBreadth).toHaveBeenCalledWith('HK');
@@ -200,7 +223,7 @@ describe('BreadthPage', () => {
       },
     });
 
-    renderWithProviders(<BreadthPage />);
+    renderBreadthPage();
 
     const chart = await screen.findByTestId('breadth-chart');
     await waitFor(() => {
@@ -212,7 +235,7 @@ describe('BreadthPage', () => {
   it('renders breadth data when the optional benchmark overlay request fails', async () => {
     stocksApi.getPriceHistory.mockRejectedValue(new Error('benchmark unavailable'));
 
-    renderWithProviders(<BreadthPage />);
+    renderBreadthPage();
 
     const chart = await screen.findByTestId('breadth-chart');
     expect(chart).toHaveTextContent('2800.HK:1');
@@ -222,7 +245,7 @@ describe('BreadthPage', () => {
   it('refetches breadth data when the selected market changes', async () => {
     const user = userEvent.setup();
 
-    renderWithProviders(<BreadthPage />);
+    renderBreadthPage();
 
     const marketSelect = await screen.findByRole('combobox', { name: /market/i });
     fireEvent.mouseDown(marketSelect);
@@ -248,7 +271,7 @@ describe('BreadthPage', () => {
         : Promise.resolve(breadthRow(market))
     ));
 
-    renderWithProviders(<BreadthPage />);
+    renderBreadthPage();
 
     expect(
       await screen.findByText('Error loading HK breadth data: No breadth data available for market HK.')

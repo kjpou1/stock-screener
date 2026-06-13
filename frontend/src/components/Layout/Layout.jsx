@@ -26,6 +26,7 @@ import { ColorModeContext } from '../../contexts/ColorModeContext';
 import { AssistantChat } from '../AssistantChat';
 import PipelineProgressCard from '../PipelineProgressCard';
 import TaskSettingsModal from '../Settings/TaskSettingsModal';
+import MarketSelector from './MarketSelector';
 import RuntimeActivityStatusButton from './RuntimeActivityStatusButton';
 import { AssistantChatProvider } from '../../contexts/AssistantChatContext';
 import { useRuntime } from '../../contexts/RuntimeContext';
@@ -109,6 +110,7 @@ function Layout({ children }) {
             STOCK SCANNER
           </Typography>
           <RuntimeActivityStatusButton />
+          <MarketSelector />
           <Box sx={{ flexGrow: 1 }} />
           <TickerSearch />
           <Box sx={{ flexGrow: 1 }} />

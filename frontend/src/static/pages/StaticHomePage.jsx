@@ -26,11 +26,11 @@ import RankChangeCell from '../../components/shared/RankChangeCell';
 import TickerCell from '../../components/common/TickerCell';
 import { formatLocalCurrency } from '../../utils/formatUtils';
 import { useStaticMarket } from '../StaticMarketContext';
-import { marketFlag } from '../marketFlags';
+import { marketFlag } from '../../utils/marketFlags';
 import { MARKET_CAP_OPTIONS } from '../../features/scan/components/filterPanel/constants';
 import { applyScanFilterDefaults } from '../../features/scan/defaultFilters';
 import { filterStaticScanRows, sortStaticScanRows } from '../scanClient';
-import DailyScanRowsTable from '../components/DailyScanRowsTable';
+import DailyScanRowsTable from '../../components/shared/DailyScanRowsTable';
 import { buildFiltersFromPreset } from '../hooks/usePresetScreens';
 
 const EMPTY_RESULTS = [];

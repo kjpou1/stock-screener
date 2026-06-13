@@ -68,7 +68,7 @@ StockBee-style advance/decline analysis with SPY overlay, daily movers (stocks u
 
 #### Relative Rotation Graph (RRG)
 
-A MarketSmith/Bloomberg-style quadrant view of the same 197-group dataset: every industry group (or GICS-sector roll-up) is plotted by **RS-Ratio** vs **RS-Momentum**, with a weekly tail and direction arrow tracing its path through **Leading → Weakening → Lagging → Improving**. One screen answers *"what's rotating in, what's rolling over."* Filter by name or current rank to focus on the groups you care about, and click any dot to drill into its constituents.
+A MarketSmith/Bloomberg-style quadrant view of the same 197-group dataset: every industry group (or GICS-sector roll-up) is plotted by **RS-Ratio** vs **RS-Momentum**, with a smooth spline tail and direction arrows tracing its weekly path through **Leading → Weakening → Lagging → Improving**. One screen answers *"what's rotating in, what's rolling over."* Drag a rectangle to zoom into crowded clusters, toggle collision-avoiding group labels, filter by quadrant, name, or current rank, and click any dot to drill into its constituents. Available for every enabled market, in group or sector scope.
 
 ![Relative Rotation Graph](docs/screenshots/rrg-rotation.svg)
 *RRG: industry-group rotation with direction-arrowed weekly tails*
@@ -103,7 +103,7 @@ cp .env.docker.example .env.docker
 # Edit .env.docker:
 #   BACKEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-backend
 #   FRONTEND_IMAGE=ghcr.io/<owner>/stockscreenclaude-frontend
-#   APP_IMAGE_TAG=v1.2.0
+#   APP_IMAGE_TAG=v1.3.0
 #   SERVER_AUTH_PASSWORD=choose-a-long-random-password
 #   GROQ_API_KEY=...
 ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh --env-file .env.docker -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.release.yml pull
@@ -111,7 +111,7 @@ ENABLED_MARKETS=US,HK,CN scripts/docker-compose-enabled-markets.sh --env-file .e
 # Open http://localhost
 ```
 
-This path deploys the tagged `v1.2.0` GHCR images instead of building locally. After the stack is up, the UI opens to a first-run bootstrap screen — see [First-Run Bootstrap](#first-run-bootstrap) for the staged pipeline and market selection.
+This path deploys the tagged `v1.3.0` GHCR images instead of building locally. After the stack is up, the UI opens to a first-run bootstrap screen — see [First-Run Bootstrap](#first-run-bootstrap) for the staged pipeline and market selection.
 
 For local development or contributor laptops, use the default local compose stack instead:
 
@@ -207,7 +207,7 @@ Full reference: **[Environment Variables](docs/ENVIRONMENT.md)**
 - **AI chatbot** with Groq-first routing, web search research mode, and persistent conversations
 - **Theme discovery** from RSS, Twitter/X, and news sources with AI clustering and lifecycle tracking
 - **Market breadth** dashboard with StockBee-style indicators and historical trends
-- **197 IBD industry groups** ranked by relative strength with movers and constituent analysis
+- **197 IBD industry groups** ranked by relative strength with movers, constituent analysis, and a zoomable Relative Rotation Graph (RRG)
 - **Watchlists** with RS/price sparklines, multi-period change bars, and drag-and-drop organization
 - **MCP integration** for AI copilot workflows with 12 tools via stdio and Streamable HTTP ([details](docs/MCP_INTEGRATION.md))
 - **TradingView-style charts** with candlestick OHLC and technical overlays

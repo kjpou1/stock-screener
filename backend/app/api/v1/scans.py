@@ -115,12 +115,22 @@ async def get_scan_bootstrap(
 @router.get("", response_model=ScanListResponse)
 async def list_scans(
     limit: int = Query(20, ge=1, le=100, description="Number of scans to return"),
+    market: str | None = Query(None, description="Restrict to scans of one universe market (e.g. US, HK)"),
     uow: Any = Depends(get_uow),
 ):
     """Get list of all scans ordered by most recent first."""
+    normalized_market: str | None = None
+    if market is not None:
+        normalized_market = market.strip().upper()
+        if normalized_market not in _market_catalog.supported_market_codes():
+            supported = ", ".join(_market_catalog.supported_market_codes())
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported market '{market}'. Expected one of: {supported}.",
+            )
     try:
         with uow:
-            scans = uow.scans.list_recent(limit=limit)
+            scans = uow.scans.list_recent(limit=limit, market=normalized_market)
 
             scan_items = []
             for scan in scans:

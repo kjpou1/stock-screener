@@ -5,10 +5,9 @@ Provides access to current and historical group rankings,
 rank movers, and manual calculation triggers.
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
-from typing import List
 
 from ...config import settings
 from ...database import get_db
@@ -19,27 +18,33 @@ from ...schemas.groups import (
     GroupRankingsResponse,
     GroupDetailResponse,
     MoversResponse,
+    RRGBundleResponse,
     RRGResponse,
     CalculationRequest,
     CalculationResponse,
     CalculationStatusResponse,
     BackfillRequest,
-    BackfillResponse,
 )
 from ...schemas.ui_view_snapshot import UISnapshotEnvelope
 from ...domain.analytics.scope import market_scope_tag
 from ...domain.markets.catalog import get_market_catalog
+from ...services.group_rankings_cache import cached_group_payload
 from ...services.market_group_ranking_service import get_market_group_ranking_service
-from ...services.rrg_service import RRGService
 from ...services.ui_snapshot_service import GroupsBootstrapUnavailableError
-from ...wiring.bootstrap import get_group_rank_service, get_ui_snapshot_service
+from ...wiring.bootstrap import (
+    get_group_rank_service,
+    get_rrg_service as get_runtime_rrg_service,
+    get_ui_snapshot_service,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 _market_catalog = get_market_catalog()
 SUPPORTED_GROUP_MARKETS = _market_catalog.market_codes_with_capability("group_rankings")
+SUPPORTED_RRG_MARKETS = _market_catalog.market_codes_with_rrg_scope("groups")
 MARKET_QUERY_DESCRIPTION = "Market code: " + ", ".join(SUPPORTED_GROUP_MARKETS)
+RRG_MARKET_QUERY_DESCRIPTION = "RRG market code: " + ", ".join(SUPPORTED_RRG_MARKETS)
 DEFAULT_GROUP_PERIOD = "1w"
 
 
@@ -49,6 +54,10 @@ def _get_group_rank_service():
 
 def _get_market_group_service():
     return get_market_group_ranking_service()
+
+
+def _get_rrg_service():
+    return get_runtime_rrg_service()
 
 
 def _normalize_market_param(market: str | None) -> str:
@@ -64,11 +73,61 @@ def _normalize_market_param(market: str | None) -> str:
     return normalized
 
 
+def _normalize_rrg_market_param(market: str | None) -> str:
+    normalized = str(market or "US").strip().upper()
+    if normalized not in SUPPORTED_RRG_MARKETS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported RRG market '{market}'. Expected one of: "
+                f"{', '.join(SUPPORTED_RRG_MARKETS)}."
+            ),
+        )
+    return normalized
+
+
+# Rankings change once per trading day; these wrappers cache the computed
+# service payloads in Redis (epoch-invalidated by the calculation tasks) so
+# the 60s frontend refetch loop doesn't recompute ~26K-row rank histories.
+def _fetch_rankings_cached(db: Session, *, market: str, limit: int) -> list:
+    return cached_group_payload(
+        market=market,
+        name="rankings",
+        params=f"limit={limit}",
+        compute=lambda: _get_group_rank_service().get_current_rankings(
+            db, limit=limit, market=market
+        ),
+    )
+
+
+def _fetch_movers_cached(db: Session, *, market: str, period: str, limit: int) -> dict:
+    return cached_group_payload(
+        market=market,
+        name="movers",
+        params=f"period={period}:limit={limit}",
+        compute=lambda: _get_group_rank_service().get_rank_movers(
+            db, period=period, limit=limit, market=market
+        ),
+        should_cache=lambda v: bool(v.get("gainers") or v.get("losers")),
+    )
+
+
+def _fetch_rrg_scopes_cached(db: Session, *, market: str, scopes: list, tail_weeks: int) -> dict:
+    return cached_group_payload(
+        market=market,
+        name="rrg_scopes",
+        params=f"tail={tail_weeks}:scopes={','.join(scopes)}",
+        compute=lambda: _get_rrg_service().get_rrg_scopes(
+            db, market=market, scopes=scopes, tail_weeks=tail_weeks
+        ),
+        should_cache=lambda v: any(_rrg_scope_has_data(v.get(s)) for s in scopes),
+    )
+
+
 def _build_groups_payload(db: Session, *, market: str) -> dict:
-    service = _get_group_rank_service()
-    rankings = service.get_current_rankings(db, limit=197, market=market)
-    movers = service.get_rank_movers(
-        db, period=DEFAULT_GROUP_PERIOD, limit=10, market=market
+    rankings = _fetch_rankings_cached(db, market=market, limit=197)
+    movers = _fetch_movers_cached(
+        db, market=market, period=DEFAULT_GROUP_PERIOD, limit=10
     )
 
     if not rankings:
@@ -117,12 +176,7 @@ async def get_current_rankings(
     for 1 week, 1 month, 3 months, and 6 months.
     """
     normalized_market = _normalize_market_param(market)
-    service = _get_group_rank_service()
-    rankings = service.get_current_rankings(
-        db,
-        limit=limit,
-        market=normalized_market,
-    )
+    rankings = _fetch_rankings_cached(db, market=normalized_market, limit=limit)
 
     if not rankings:
         raise HTTPException(
@@ -141,30 +195,48 @@ async def get_current_rankings(
     )
 
 
-@router.get("/rrg", response_model=RRGResponse)
-async def get_rrg(
-    tail_weeks: int = Query(8, ge=2, le=20, description="Number of weekly tail points"),
-    scope: str = Query(
-        "groups", pattern="^(groups|sectors)$", description="groups or sectors"
-    ),
-    limit: int = Query(197, ge=1, le=197, description="Top-N series by rank"),
-    market: str = Query("US", description=MARKET_QUERY_DESCRIPTION),
-    db: Session = Depends(get_db),
-):
-    """Relative Rotation Graph coordinates for IBD groups (or GICS-sector roll-ups).
-
-    Each series carries its current (RS-Ratio, RS-Momentum) point plus a weekly
-    tail tracing its path through the Leading/Weakening/Lagging/Improving
-    quadrants. Math is computed server-side (see ``services/rrg_service.py``).
-    """
-    normalized_market = _normalize_market_param(market)
-    service = RRGService(group_rank_service=_get_group_rank_service())
-    payload = service.get_rrg(
-        db, market=normalized_market, scope=scope, tail_weeks=tail_weeks
+def _build_rrg_response(
+    payload: dict,
+    *,
+    market: str,
+    scope: str,
+    tail_weeks: int,
+    limit: int,
+) -> RRGResponse:
+    groups = (payload.get("groups") or [])[:limit]
+    return RRGResponse(
+        date=payload.get("date"),
+        market=market,
+        scope=scope,
+        tail_weeks=tail_weeks,
+        total_groups=len(groups),
+        groups=groups,
+        **market_scope_tag(market),
     )
 
-    groups = payload["groups"][:limit]
-    if not groups:
+
+def _rrg_scope_has_data(payload: dict | None) -> bool:
+    return bool((payload or {}).get("groups"))
+
+
+@router.get("/rrg/scopes", response_model=RRGBundleResponse)
+async def get_rrg_scopes(
+    tail_weeks: int = Query(8, ge=2, le=20, description="Number of weekly tail points"),
+    limit: int = Query(197, ge=1, le=197, description="Top-N series by rank"),
+    market: str = Query("US", description=RRG_MARKET_QUERY_DESCRIPTION),
+    db: Session = Depends(get_db),
+):
+    """Relative Rotation Graph coordinates for all scopes available to a market."""
+    normalized_market = _normalize_rrg_market_param(market)
+    service = _get_rrg_service()
+    requested_scopes = service.available_scopes_for_market(normalized_market)
+    scopes = _fetch_rrg_scopes_cached(
+        db,
+        market=normalized_market,
+        scopes=requested_scopes,
+        tail_weeks=tail_weeks,
+    )
+    if not any(_rrg_scope_has_data(scopes.get(scope)) for scope in requested_scopes):
         raise HTTPException(
             status_code=404,
             detail=(
@@ -173,15 +245,81 @@ async def get_rrg(
             ),
         )
 
-    return RRGResponse(
-        date=payload["date"],
+    responses = {
+        scope: _build_rrg_response(
+            scope_payload,
+            market=normalized_market,
+            scope=scope,
+            tail_weeks=tail_weeks,
+            limit=limit,
+        )
+        for scope, scope_payload in scopes.items()
+    }
+    available_scopes = [
+        scope for scope in requested_scopes
+        if responses.get(scope) and responses[scope].total_groups > 0
+    ]
+    primary_scope = available_scopes[0] if available_scopes else next(iter(responses))
+
+    return RRGBundleResponse(
+        date=responses[primary_scope].date,
+        market=normalized_market,
+        tail_weeks=tail_weeks,
+        available_scopes=available_scopes,
+        payload=responses,
+        **market_scope_tag(normalized_market),
+    )
+
+
+@router.get("/rrg", response_model=RRGResponse)
+async def get_rrg(
+    tail_weeks: int = Query(8, ge=2, le=20, description="Number of weekly tail points"),
+    scope: str = Query(
+        "groups", pattern="^(groups|sectors)$", description="groups or sectors"
+    ),
+    limit: int = Query(197, ge=1, le=197, description="Top-N series by rank"),
+    market: str = Query("US", description=RRG_MARKET_QUERY_DESCRIPTION),
+    db: Session = Depends(get_db),
+):
+    """Relative Rotation Graph coordinates for IBD groups (or GICS-sector roll-ups).
+
+    Each series carries its current (RS-Ratio, RS-Momentum) point plus a weekly
+    tail tracing its path through the Leading/Weakening/Lagging/Improving
+    quadrants. Math is computed server-side (see ``services/rrg_service.py``).
+    """
+    normalized_market = _normalize_rrg_market_param(market)
+    service = _get_rrg_service()
+    available_scopes = service.available_scopes_for_market(normalized_market)
+    if scope not in available_scopes:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported RRG scope '{scope}' for market '{market}'. "
+                f"Expected one of: {', '.join(available_scopes)}."
+            ),
+        )
+    payload = service.get_rrg(
+        db, market=normalized_market, scope=scope, tail_weeks=tail_weeks
+    )
+
+    if not payload.get("groups"):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No RRG data available for this market. "
+                "Run a group-ranking backfill first."
+            ),
+        )
+
+    response = _build_rrg_response(
+        payload,
         market=normalized_market,
         scope=scope,
         tail_weeks=tail_weeks,
-        total_groups=len(groups),
-        groups=groups,
-        **market_scope_tag(normalized_market),
+        limit=limit,
     )
+
+    return response
 
 
 @router.get("/bootstrap", response_model=UISnapshotEnvelope)
@@ -235,12 +373,8 @@ async def get_rank_movers(
         Lists of rank gainers and losers
     """
     normalized_market = _normalize_market_param(market)
-    service = _get_group_rank_service()
-    movers = service.get_rank_movers(
-        db,
-        period=period,
-        limit=limit,
-        market=normalized_market,
+    movers = _fetch_movers_cached(
+        db, market=normalized_market, period=period, limit=limit
     )
 
     if not movers.get('gainers') and not movers.get('losers'):
@@ -448,7 +582,7 @@ async def trigger_backfill(
     if (end - start) > max_range:
         raise HTTPException(
             status_code=400,
-            detail=f"Backfill range cannot exceed 1 year (365 days)"
+            detail="Backfill range cannot exceed 1 year (365 days)"
         )
 
     # Dispatch to Celery (non-blocking)

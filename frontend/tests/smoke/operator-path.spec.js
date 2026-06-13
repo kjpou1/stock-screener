@@ -313,6 +313,68 @@ test('single-tenant operator smoke path (assistant -> scan -> themes review -> a
       return jsonResponse(route, { symbols: ['SPY', 'QQQ', 'IWM'] });
     }
 
+    if (path === '/v1/market-scan/daily-snapshot' && method === 'GET') {
+      return jsonResponse(route, {
+        schema_version: 1,
+        market: 'US',
+        market_display_name: 'United States',
+        scan_id: latestScanId,
+        freshness: {
+          scan_id: latestScanId,
+          scan_as_of_date: '2026-04-09',
+          scan_published_at: '2026-04-09T00:00:00Z',
+          breadth_latest_date: '2026-04-09',
+          groups_latest_date: '2026-04-09',
+        },
+        key_markets: [
+          {
+            symbol: 'SPY',
+            display_name: 'S&P 500 ETF',
+            currency: 'USD',
+            latest_close: 500,
+            latest_date: '2026-04-09',
+            change_1d: 0.5,
+            history: [
+              { date: '2026-04-08', close: 497.5 },
+              { date: '2026-04-09', close: 500 },
+            ],
+          },
+        ],
+        top_candidates: {
+          min_dollar_volume: 100000000,
+          rows: [
+            {
+              symbol: 'NVDA',
+              company_name: 'NVIDIA Corporation',
+              composite_score: 97.5,
+              current_price: 903.42,
+              market_cap: 2100000000000,
+              currency: 'USD',
+              rating: 'Buy',
+              rs_rating: 98,
+              ibd_industry_group: 'Semiconductors',
+              ibd_group_rank: 1,
+            },
+          ],
+        },
+        leaders: {
+          criteria: { max_group_rank: 40, min_rs_rating: 80, min_dollar_volume: 100000000 },
+          rows: [],
+        },
+        top_groups: [
+          {
+            industry_group: 'Semiconductors',
+            rank: 1,
+            rank_change_1w: 0,
+            rank_change_1m: 1,
+            top_symbol: 'NVDA',
+            top_symbol_name: 'NVIDIA Corporation',
+            top_rs_rating: 98,
+          },
+        ],
+      });
+    }
+
     if (path === '/v1/universe/stats' && method === 'GET') {
       return jsonResponse(route, {
         active: 2,
@@ -556,7 +618,10 @@ test('single-tenant operator smoke path (assistant -> scan -> themes review -> a
   await expect(page.getByText('1 symbol can be added to Leaders.')).toBeVisible();
   await page.getByRole('button', { name: 'Confirm add' }).click();
   await expect(page.getByText('1 symbol can be added to Leaders.')).not.toBeVisible();
-  await page.keyboard.press('Escape');
+  // Close the drawer via its button: a raw Escape can land mid dialog-exit
+  // transition, while focus sits on a detaching element outside the drawer's
+  // modal root, and never reach the drawer.
+  await page.getByRole('button', { name: 'Close assistant' }).click();
   await expect(page.getByRole('button', { name: 'Scan' })).toBeVisible();
   await page.getByRole('button', { name: 'Scan' }).click();
   await expect(page.getByText(/Results:\s*1 stocks/i)).toBeVisible();

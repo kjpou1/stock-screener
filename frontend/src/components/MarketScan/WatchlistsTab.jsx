@@ -3,7 +3,7 @@
  *
  * Main tab for user-defined watchlists display.
  */
-import { useState, useEffect, useMemo } from 'react';
+import { lazy, Suspense, useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
@@ -23,7 +23,8 @@ import DownloadIcon from '@mui/icons-material/Download';
 import { getWatchlists, getWatchlistData, getWatchlistStewardship } from '../../api/userWatchlists';
 import WatchlistTable from './WatchlistTable';
 import UserWatchlistManager from './UserWatchlistManager';
-import WatchlistChartModal from './WatchlistChartModal';
+// Defers the lightweight-charts bundle until a chart is actually opened.
+const WatchlistChartModal = lazy(() => import('./WatchlistChartModal'));
 import { useStrategyProfile } from '../../contexts/StrategyProfileContext';
 
 function WatchlistsTab() {
@@ -278,12 +279,16 @@ function WatchlistsTab() {
 
       <UserWatchlistManager open={managerOpen} onClose={() => setManagerOpen(false)} onUpdate={handleRefresh} />
 
-      <WatchlistChartModal
-        open={chartModalOpen}
-        onClose={() => setChartModalOpen(false)}
-        initialSymbol={selectedSymbol}
-        symbols={watchlistSymbols}
-      />
+      {chartModalOpen && (
+        <Suspense fallback={null}>
+          <WatchlistChartModal
+            open={chartModalOpen}
+            onClose={() => setChartModalOpen(false)}
+            initialSymbol={selectedSymbol}
+            symbols={watchlistSymbols}
+          />
+        </Suspense>
+      )}
     </Box>
   );
 }

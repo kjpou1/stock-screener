@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from app.services.price_cache_service import PriceCacheService
     from app.services.provider_snapshot_service import ProviderSnapshotService
     from app.services.rate_limiter import RedisRateLimiter
+    from app.services.rrg_service import RRGService
     from app.services.security_master_service import SecurityMasterResolver
     from app.services.stock_universe_service import StockUniverseService
     from app.services.task_registry_service import TaskRegistryService
@@ -100,6 +101,7 @@ class RuntimeServices:
         self._ui_snapshot_service: UISnapshotService | None = None
         self._cache_bundle: CacheBundle | None = None
         self._group_rank_service: IBDGroupRankService | None = None
+        self._rrg_service: RRGService | None = None
         self._task_registry_service: TaskRegistryService | None = None
         self._data_fetch_lock: DataFetchLock | None = None
         self._workload_coordination: WorkloadCoordination | None = None
@@ -189,6 +191,28 @@ class RuntimeServices:
                         benchmark_cache=cache_bundle.benchmark,
                     )
         return self._group_rank_service
+
+    def rrg_service(self) -> RRGService:
+        if self._rrg_service is None:
+            with self._init_lock:
+                if self._rrg_service is None:
+                    from app.services.market_group_ranking_service import (
+                        get_market_group_ranking_service,
+                    )
+                    from app.services.market_taxonomy_service import (
+                        get_market_taxonomy_service,
+                    )
+                    from app.services.rrg_history_provider import build_rrg_history_provider
+                    from app.services.rrg_service import RRGService
+
+                    self._rrg_service = RRGService(
+                        history_provider=build_rrg_history_provider(
+                            group_rank_service=self.group_rank_service(),
+                            market_group_ranking_service=get_market_group_ranking_service(),
+                        ),
+                        taxonomy_service=get_market_taxonomy_service(),
+                    )
+        return self._rrg_service
 
     def task_registry_service(self) -> TaskRegistryService:
         if self._task_registry_service is None:
@@ -423,6 +447,7 @@ class RuntimeServices:
             self._ui_snapshot_service = None
             self._cache_bundle = None
             self._group_rank_service = None
+            self._rrg_service = None
             self._task_registry_service = None
             self._data_fetch_lock = None
             self._workload_coordination = None
@@ -592,6 +617,11 @@ def get_benchmark_cache() -> BenchmarkCacheService:
 def get_group_rank_service() -> IBDGroupRankService:
     """Return process-scoped group-rank service."""
     return _resolve_runtime_services().group_rank_service()
+
+
+def get_rrg_service() -> RRGService:
+    """Return process-scoped Relative Rotation Graph service."""
+    return _resolve_runtime_services().rrg_service()
 
 
 def get_task_registry_service() -> TaskRegistryService:
